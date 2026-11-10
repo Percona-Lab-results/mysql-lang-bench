@@ -129,6 +129,8 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
     --grid: #e1e0d9; --baseline: #c3c2b7; --ghost: #c9c8c0;
     --border: rgba(11,11,11,0.10);
     --series-1: #2a78d6; --series-2: #eb6834;
+    --cat-1: #2a78d6; --cat-2: #eb6834; --cat-3: #1baf7a; --cat-4: #eda100;
+    --cat-5: #e87ba4; --cat-6: #008300; --cat-7: #6250d6; --cat-8: #e34948;
   }
   @media (prefers-color-scheme: dark) {
     :root:where(:not([data-theme="light"])) .viz-root {
@@ -138,6 +140,8 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
       --grid: #2c2c2a; --baseline: #383835; --ghost: #3d3d39;
       --border: rgba(255,255,255,0.10);
       --series-1: #3987e5; --series-2: #d95926;
+      --cat-1: #3987e5; --cat-2: #d95926; --cat-3: #199e70; --cat-4: #c98500;
+      --cat-5: #d55181; --cat-6: #008300; --cat-7: #9085e9; --cat-8: #e66767;
     }
   }
   :root[data-theme="dark"] .viz-root {
@@ -147,6 +151,8 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
     --grid: #2c2c2a; --baseline: #383835; --ghost: #3d3d39;
     --border: rgba(255,255,255,0.10);
     --series-1: #3987e5; --series-2: #d95926;
+    --cat-1: #3987e5; --cat-2: #d95926; --cat-3: #199e70; --cat-4: #c98500;
+    --cat-5: #d55181; --cat-6: #008300; --cat-7: #9085e9; --cat-8: #e66767;
   }
   * { box-sizing: border-box; }
   body.viz-root {
@@ -171,8 +177,13 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
   section { margin-top: 34px; }
   h2 { font-size: 16px; margin: 0 0 2px; }
   .sub { color: var(--text-secondary); margin: 0 0 14px; max-width: 80ch; }
-  .legend { display: flex; gap: 18px; align-items: center; margin: 0 0 10px; color: var(--text-secondary); font-size: 13px; }
+  .legend { display: flex; gap: 18px; align-items: center; margin: 0 0 10px; color: var(--text-secondary); font-size: 13px; flex-wrap: wrap; }
   .legend .key { display: inline-block; width: 18px; height: 0; border-top: 2.5px solid; border-radius: 2px; margin-right: 6px; vertical-align: middle; }
+  .legend .key.dashed { border-top-style: dashed; }
+  .bigchart { background: var(--surface-1); border: 1px solid var(--border); border-radius: 10px; padding: 14px 16px 8px; }
+  .bigchart svg { display: block; width: 100%; height: auto; }
+  .bigchart svg:focus { outline: 2px solid var(--series-1); outline-offset: 2px; border-radius: 4px; }
+  svg .seriesname { fill: var(--text-secondary); font-weight: 600; font-size: 11.5px; }
   .facets { display: grid; grid-template-columns: repeat(auto-fill, minmax(255px, 1fr)); gap: 14px; }
   .facet { background: var(--surface-1); border: 1px solid var(--border); border-radius: 10px; padding: 10px 12px 6px; }
   .facet h3 { font-size: 13px; font-weight: 600; margin: 0; }
@@ -222,9 +233,11 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
 
   <section>
     <h2>Throughput by worker count</h2>
-    <p class="sub">Each panel highlights one language; the gray lines are all other
-    languages for context. Panels are ordered by peak throughput and share the same scale.</p>
-    <div class="facets" id="tps-facets"></div>
+    <p class="sub">All languages on one chart, transactions per second against worker count.
+    Lines are named at their right end; dashed lines reuse a hue (9th&ndash;11th series).
+    Hover anywhere for every language&rsquo;s value at that worker count.</p>
+    <div class="legend" id="tps-legend"></div>
+    <div class="bigchart" id="tps-big"></div>
     <details class="tables"><summary>Table view — transactions per second</summary>
       <div class="tablewrap">__TBL_TPS__</div></details>
   </section>
@@ -403,17 +416,128 @@ const DATA = __DATA__;
     return card;
   }
 
-  // --- TPS small multiples (emphasis) ---
-  const tpsMax = Math.max(...DATA.series.map(s => Math.max(...s.tps)));
-  const tpsHost = document.getElementById("tps-facets");
-  for (const s of DATA.series) {
-    const defs = DATA.series.filter(o => o !== s).map(o => ({ vals: o.tps, ghost: true }));
-    defs.push({ vals: s.tps, color: "var(--series-1)", marker: true, endLabel: true });
-    const svg = facetSVG(defs, Math.ceil(tpsMax / 10000) * 10000,
-      i => [{ color: "var(--series-1)", value: fmtFull(s.tps[i]) + " tps", name: s.name }],
-      s.name + ": transactions per second by worker count");
-    tpsHost.appendChild(facetCard(s, svg));
-  }
+  // --- TPS: one large multi-series chart -----------------------------------
+  // 11 series: the 8 validated categorical slots, then dashed repeats of
+  // slots 1-3 (composite encoding). Identity is never color-alone: every line
+  // is direct-labeled at its end, listed in the legend, and in the tooltip.
+  const styleFor = i => ({
+    color: `var(--cat-${(i % 8) + 1})`,
+    dash: i >= 8 ? "7 5" : null,
+  });
+  (function bigTPS() {
+    const BW = 1120, BH = 540, BM = { l: 56, r: 170, t: 14, b: 32 };
+    const BIW = BW - BM.l - BM.r, BIH = BH - BM.t - BM.b;
+    const yMax = Math.ceil(Math.max(...DATA.series.map(s => Math.max(...s.tps))) / 10000) * 10000;
+    const BX = i => BM.l + i * BIW / (N - 1);
+    const BY = v => BM.t + BIH - (v / yMax) * BIH;
+    const svg = el("svg", { viewBox: `0 0 ${BW} ${BH}`, tabindex: "0", role: "img",
+      "aria-label": "Transactions per second by worker count, all languages" });
+    for (let tv = 0; tv <= yMax; tv += 5000) {
+      svg.appendChild(el("line", { x1: BM.l, x2: BW - BM.r, y1: BY(tv), y2: BY(tv), stroke: "var(--grid)", "stroke-width": 1 }));
+      const t = el("text", { x: BM.l - 6, y: BY(tv) + 3.5, "text-anchor": "end" });
+      t.textContent = tv === 0 ? "0" : (tv / 1000) + "K";
+      svg.appendChild(t);
+    }
+    svg.appendChild(el("line", { x1: BM.l, x2: BW - BM.r, y1: BM.t + BIH, y2: BM.t + BIH, stroke: "var(--baseline)", "stroke-width": 1 }));
+    for (let i = 0; i < N; i++) {
+      const t = el("text", { x: BX(i), y: BH - 12, "text-anchor": "middle" });
+      t.textContent = T[i];
+      svg.appendChild(t);
+    }
+    // lines (draw in reverse peak order so the leaders render on top)
+    const path = vals => vals.map((v, i) => (i ? "L" : "M") + BX(i).toFixed(1) + " " + BY(v).toFixed(1)).join(" ");
+    for (let si = DATA.series.length - 1; si >= 0; si--) {
+      const s = DATA.series[si], st = styleFor(si);
+      const attrs = { d: path(s.tps), fill: "none", stroke: st.color, "stroke-width": 2, "stroke-linejoin": "round", "stroke-linecap": "round" };
+      if (st.dash) attrs["stroke-dasharray"] = st.dash;
+      svg.appendChild(el("path", attrs));
+    }
+    // end markers + collision-resolved name labels with leader lines
+    const labels = DATA.series.map((s, si) => ({
+      s, si, endY: BY(s.tps[N - 1]), y: BY(s.tps[N - 1]),
+    })).sort((a, b) => a.y - b.y);
+    const GAPL = 16;
+    for (let k = 1; k < labels.length; k++) {
+      if (labels[k].y - labels[k - 1].y < GAPL) labels[k].y = labels[k - 1].y + GAPL;
+    }
+    const over = labels[labels.length - 1].y - (BM.t + BIH + 6);
+    if (over > 0) for (const L of labels) L.y -= over * (L.y - BM.t) / (BM.t + BIH - BM.t);
+    for (const L of labels) {
+      const st = styleFor(L.si);
+      svg.appendChild(el("circle", { cx: BX(N - 1), cy: L.endY, r: 4, fill: st.color, stroke: "var(--surface-1)", "stroke-width": 2 }));
+      if (Math.abs(L.y - L.endY) > 3) {
+        svg.appendChild(el("line", { x1: BX(N - 1) + 7, y1: L.endY, x2: BX(N - 1) + 22, y2: L.y, stroke: "var(--baseline)", "stroke-width": 1 }));
+      }
+      const t = el("text", { x: BX(N - 1) + 26, y: L.y + 3.5, class: "seriesname" });
+      t.textContent = L.s.name + "  " + fmt(L.s.tps[N - 1]);
+      svg.appendChild(t);
+    }
+    // hover: crosshair + all-series tooltip, keyboard navigable
+    const cross = el("line", { y1: BM.t, y2: BM.t + BIH, stroke: "var(--baseline)", "stroke-width": 1, visibility: "hidden" });
+    svg.appendChild(cross);
+    let idx = N - 1;
+    function show(i, cx, cy) {
+      idx = i;
+      cross.setAttribute("x1", BX(i)); cross.setAttribute("x2", BX(i));
+      cross.setAttribute("visibility", "visible");
+      tooltip.replaceChildren();
+      const title = document.createElement("div");
+      title.className = "tt-title"; title.textContent = T[i] + " threads";
+      tooltip.appendChild(title);
+      const ranked = DATA.series.map((s, si) => ({ s, si })).sort((a, b) => b.s.tps[i] - a.s.tps[i]);
+      for (const { s, si } of ranked) {
+        const st = styleFor(si);
+        const row = document.createElement("div"); row.className = "tt-row";
+        const key = document.createElement("span"); key.className = "tt-key" + (st.dash ? " dashed" : "");
+        key.style.borderColor = st.color;
+        if (st.dash) key.style.borderTopStyle = "dashed";
+        const val = document.createElement("span"); val.className = "tt-val"; val.textContent = fmtFull(s.tps[i]);
+        const name = document.createElement("span"); name.className = "tt-name"; name.textContent = s.name;
+        row.append(key, val, name); tooltip.appendChild(row);
+      }
+      tooltip.style.display = "block";
+      const tw = tooltip.offsetWidth, th = tooltip.offsetHeight, pad = 14;
+      let left = cx + pad;
+      if (left + tw > window.innerWidth - 8) left = cx - tw - pad;
+      tooltip.style.left = left + "px";
+      tooltip.style.top = Math.max(8, Math.min(cy - 10, window.innerHeight - th - 8)) + "px";
+    }
+    function hide() { cross.setAttribute("visibility", "hidden"); tooltip.style.display = "none"; }
+    svg.addEventListener("pointermove", ev => {
+      const rect = svg.getBoundingClientRect();
+      const px = (ev.clientX - rect.left) * (BW / rect.width);
+      let best = 0, bd = Infinity;
+      for (let i = 0; i < N; i++) { const d = Math.abs(px - BX(i)); if (d < bd) { bd = d; best = i; } }
+      show(best, ev.clientX, ev.clientY);
+    });
+    svg.addEventListener("pointerleave", hide);
+    svg.addEventListener("focus", () => {
+      const r = svg.getBoundingClientRect();
+      show(idx, r.left + (BX(idx) * r.width / BW), r.top + r.height / 3);
+    });
+    svg.addEventListener("blur", hide);
+    svg.addEventListener("keydown", ev => {
+      if (ev.key === "ArrowRight" || ev.key === "ArrowLeft") {
+        ev.preventDefault();
+        const i = Math.min(N - 1, Math.max(0, idx + (ev.key === "ArrowRight" ? 1 : -1)));
+        const r = svg.getBoundingClientRect();
+        show(i, r.left + (BX(i) * r.width / BW), r.top + r.height / 3);
+      } else if (ev.key === "Escape") hide();
+    });
+    document.getElementById("tps-big").appendChild(svg);
+    // legend (line keys mirror the mark: solid/dashed stroke of the hue)
+    const leg = document.getElementById("tps-legend");
+    DATA.series.forEach((s, si) => {
+      const st = styleFor(si);
+      const item = document.createElement("span");
+      const key = document.createElement("span");
+      key.className = "key" + (st.dash ? " dashed" : "");
+      key.style.borderColor = st.color;
+      item.appendChild(key);
+      item.appendChild(document.createTextNode(s.name));
+      leg.appendChild(item);
+    });
+  })();
 
   // --- CPU small multiples (client + server) ---
   const cpuMax = Math.max(...DATA.series.map(s => Math.max(...s.cli, ...s.srv)));
