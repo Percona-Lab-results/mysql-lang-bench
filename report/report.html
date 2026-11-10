@@ -13,6 +13,7 @@
     --border: rgba(11,11,11,0.10);
     --cat-1: #2a78d6; --cat-2: #eb6834; --cat-3: #1baf7a; --cat-4: #eda100;
     --cat-5: #e87ba4; --cat-6: #008300; --cat-7: #6250d6; --cat-8: #e34948;
+    --cat-9: #84b000; --cat-10: #0092c4; --cat-11: #8c5a2b;
   }
   @media (prefers-color-scheme: dark) {
     :root:where(:not([data-theme="light"])) .viz-root {
@@ -23,6 +24,7 @@
       --border: rgba(255,255,255,0.10);
       --cat-1: #3987e5; --cat-2: #d95926; --cat-3: #199e70; --cat-4: #c98500;
       --cat-5: #d55181; --cat-6: #008300; --cat-7: #9085e9; --cat-8: #e66767;
+      --cat-9: #a3c636; --cat-10: #35b5e0; --cat-11: #b07845;
     }
   }
   :root[data-theme="dark"] .viz-root {
@@ -33,6 +35,7 @@
     --border: rgba(255,255,255,0.10);
     --cat-1: #3987e5; --cat-2: #d95926; --cat-3: #199e70; --cat-4: #c98500;
     --cat-5: #d55181; --cat-6: #008300; --cat-7: #9085e9; --cat-8: #e66767;
+    --cat-9: #a3c636; --cat-10: #35b5e0; --cat-11: #b07845;
   }
   * { box-sizing: border-box; }
   body.viz-root {
@@ -109,7 +112,7 @@
   <section>
     <h2>Throughput by worker count</h2>
     <p class="sub">All languages on one chart, transactions per second against worker count.
-    Each language keeps a fixed color, marker shape and line style everywhere in this report;
+    Each language keeps its own color and marker shape everywhere in this report;
     lines are also named at their right end. Hover for every language&rsquo;s value.</p>
     <div class="legend" id="tps-legend"></div>
     <div class="bigchart" id="tps-big"></div>
@@ -130,8 +133,8 @@
 
   <section>
     <h2>CPU cost per transaction</h2>
-    <p class="sub">Client CPU microseconds per committed transaction — same color, shape and
-    line style per language as above. The gray band is the server (mysqld) cost across all
+    <p class="sub">Client CPU microseconds per committed transaction — same color and marker
+    shape per language as above. The gray band is the server (mysqld) cost across all
     languages, min to max, on the same axis: near-uniform, because every client executes the
     same statements.</p>
     <div class="legend" id="cpu-legend"></div>
@@ -215,15 +218,26 @@ const DATA = {"threads":[4,8,16,32,64,128,256,512],"series":[{"lang":"c","name":
     return e;
   };
 
-  // Identity encoding, fixed per language everywhere in the report:
-  // hue = slot (i mod 8), shape = i mod 5, dash on hue reuse (i >= 8).
-  // No two languages share both hue and shape (collision needs i≡j mod 40).
-  const SHAPES = ["circle", "square", "triangle", "diamond", "tridown"];
-  const styleFor = i => ({
-    color: `var(--cat-${(i % 8) + 1})`,
-    dash: i >= 8 ? "7 5" : null,
-    shape: SHAPES[i % 5],
-  });
+  // Identity encoding, fixed per LANGUAGE (color follows the entity, never
+  // its rank): every language has a unique solid hue; marker shape is the
+  // secondary identity channel.
+  const STYLE = {
+    c:          { slot: 1,  shape: "circle"   }, // blue
+    cpp:        { slot: 2,  shape: "square"   }, // orange
+    swift:      { slot: 3,  shape: "triangle" }, // aqua
+    rust:       { slot: 8,  shape: "diamond"  }, // red
+    php:        { slot: 5,  shape: "tridown"  }, // magenta
+    java:       { slot: 6,  shape: "circle"   }, // green
+    csharp:     { slot: 11, shape: "square"   }, // brown
+    go:         { slot: 10, shape: "triangle" }, // cyan
+    javascript: { slot: 4,  shape: "diamond"  }, // yellow
+    typescript: { slot: 9,  shape: "tridown"  }, // lime
+    python:     { slot: 7,  shape: "circle"   }, // purple
+  };
+  const styleFor = lang => {
+    const s = STYLE[lang] || { slot: 1, shape: "circle" };
+    return { color: `var(--cat-${s.slot})`, dash: null, shape: s.shape };
+  };
 
   // Marker: >= 8px across, 2px surface ring so it reads over lines.
   function shapeNode(shape, x, y, color, surface) {
@@ -377,8 +391,8 @@ const DATA = {"threads":[4,8,16,32,64,128,256,512],"series":[{"lang":"c","name":
     document.getElementById(cfg.hostId).appendChild(svg);
   }
 
-  const defsFor = key => DATA.series.map((s, si) => ({ name: s.name, vals: s[key], st: styleFor(si) }));
-  const langLegend = DATA.series.map((s, si) => ({ name: s.name, key: keySVG(styleFor(si), 26, 12) }));
+  const defsFor = key => DATA.series.map(s => ({ name: s.name, vals: s[key], st: styleFor(s.lang) }));
+  const langLegend = DATA.series.map(s => ({ name: s.name, key: keySVG(styleFor(s.lang), 26, 12) }));
 
   // --- TPS: one large chart -------------------------------------------------
   const tpsMax = Math.ceil(Math.max(...DATA.series.map(s => Math.max(...s.tps))) / 10000) * 10000;
@@ -393,7 +407,7 @@ const DATA = {"threads":[4,8,16,32,64,128,256,512],"series":[{"lang":"c","name":
   const cpuMax = Math.ceil(Math.max(...DATA.series.map(s => Math.max(...s.cli)), ...DATA.srvHi) / 2000) * 2000;
   const bandKey = document.createElement("span");
   bandKey.style.cssText = "width:26px;height:10px;background:var(--band);opacity:.25;border-radius:2px;display:inline-block;";
-  legendInto("cpu-legend", DATA.series.map((s, si) => ({ name: s.name, key: keySVG(styleFor(si), 26, 12) }))
+  legendInto("cpu-legend", DATA.series.map(s => ({ name: s.name, key: keySVG(styleFor(s.lang), 26, 12) }))
     .concat([{ name: "Server (mysqld), min–max", key: bandKey }]));
   bigChart({
     hostId: "cpu-big", seriesDefs: defsFor("cli"), yMax: cpuMax, yStep: 2000,
