@@ -1,0 +1,11 @@
+Table	Op	Msg_type	Msg_text
+bench.sbtest	analyze	status	OK
+table reloaded: 10000000 rows
+java t=4 ok
+java t=8 ok
+java t=16 ok
+java t=32 ok
+java t=64 ok
+java t=128 ok
+java t=256 ok
+java t=512 ok

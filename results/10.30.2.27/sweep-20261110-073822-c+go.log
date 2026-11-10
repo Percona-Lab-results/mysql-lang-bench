@@ -1,0 +1,22 @@
+Table	Op	Msg_type	Msg_text
+bench.sbtest	analyze	status	OK
+table reloaded: 10000000 rows
+c t=4 ok
+c t=8 ok
+c t=16 ok
+c t=32 ok
+c t=64 ok
+c t=128 ok
+c t=256 ok
+c t=512 ok
+Table	Op	Msg_type	Msg_text
+bench.sbtest	analyze	status	OK
+table reloaded: 10000000 rows
+go t=4 ok
+go t=8 ok
+go t=16 ok
+go t=32 ok
+go t=64 ok
+go t=128 ok
+go t=256 ok
+go t=512 ok

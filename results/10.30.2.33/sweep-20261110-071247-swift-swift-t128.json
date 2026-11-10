@@ -1,0 +1,1 @@
+{"lang":"swift","driver":"libmysqlclient","driver_version":"8.0.46","runtime_version":"swift 6.2","prepared":true,"client_host":"beast-node7.tp.int.percona.com","db_host":"127.0.0.1","threads":128,"txns":256000,"retries":0,"errors":0,"elapsed_s":8.669,"tps":29532.1,"qps":590642.5,"p50_us":3376,"p95_us":7619,"p99_us":8463,"max_us":26571}

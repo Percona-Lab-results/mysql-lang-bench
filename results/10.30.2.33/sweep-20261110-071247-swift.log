@@ -1,0 +1,11 @@
+Table	Op	Msg_type	Msg_text
+bench.sbtest	analyze	status	OK
+table reloaded: 10000000 rows
+swift t=4 ok
+swift t=8 ok
+swift t=16 ok
+swift t=32 ok
+swift t=64 ok
+swift t=128 ok
+swift t=256 ok
+swift t=512 ok

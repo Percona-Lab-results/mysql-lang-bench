@@ -1,0 +1,10 @@
+// Ubuntu's libmysqlclient-dev installs headers under /usr/include/mysql but
+// ships no mysqlclient.pc, so pkgConfig can't supply the include path. The
+// bench hosts are uniform Ubuntu 24.04 boxes, so an absolute header path is
+// the simplest reliable option (mysql.h's own quoted includes resolve
+// relative to its directory).
+module CMySQL [system] {
+    header "/usr/include/mysql/mysql.h"
+    link "mysqlclient"
+    export *
+}

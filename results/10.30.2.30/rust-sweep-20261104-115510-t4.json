@@ -1,0 +1,1 @@
+{"lang":"rust","driver":"mysql crate","driver_version":"25.0.1","runtime_version":"rustc 1.99.1 (58cf8f9c3 2026-10-13)","prepared":true,"client_host":"beast-node4.tp.int.percona.com","db_host":"127.0.0.1","threads":4,"txns":8000,"retries":0,"errors":0,"elapsed_s":3.559,"tps":2248.1,"qps":44962.6,"p50_us":1699,"p95_us":1825,"p99_us":1846,"max_us":6000}

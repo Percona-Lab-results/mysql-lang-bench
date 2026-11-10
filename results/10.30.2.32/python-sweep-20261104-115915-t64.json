@@ -1,0 +1,1 @@
+{"lang":"python","driver":"mysqlclient","driver_version":"2.3.0 (libmysqlclient 8.4.9)","runtime_version":"3.12.3","prepared":false,"client_host":"beast-node6.tp.int.percona.com","db_host":"127.0.0.1","threads":64,"txns":128000,"retries":0,"errors":0,"elapsed_s":135.039,"tps":947.9,"qps":18957.4,"p50_us":66493,"p95_us":92821,"p99_us":105177,"max_us":143882}

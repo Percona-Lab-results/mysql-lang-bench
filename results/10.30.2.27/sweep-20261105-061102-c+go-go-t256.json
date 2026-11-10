@@ -1,0 +1,1 @@
+{"lang":"go","driver":"go-sql-driver/mysql","driver_version":"1.9.3","runtime_version":"go1.22.2","prepared":true,"client_host":"beast-node1.tp.int.percona.com","db_host":"127.0.0.1","threads":256,"txns":512000,"retries":0,"errors":0,"elapsed_s":53.843,"tps":9509.2,"qps":190183.3,"p50_us":26139,"p95_us":43248,"p99_us":52193,"max_us":89731}

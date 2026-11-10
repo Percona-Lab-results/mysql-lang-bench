@@ -1,0 +1,1 @@
+{"lang":"csharp","driver":"MySqlConnector","driver_version":"2.4.0","runtime_version":"8.0.33","prepared":true,"client_host":"beast-node5","db_host":"127.0.0.1","threads":512,"txns":1024000,"retries":0,"errors":0,"elapsed_s":268.299,"tps":3816.6,"qps":76332.7,"p50_us":112389,"p95_us":269632,"p99_us":349963,"max_us":1171809}

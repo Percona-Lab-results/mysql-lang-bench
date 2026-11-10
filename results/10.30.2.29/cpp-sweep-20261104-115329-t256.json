@@ -1,0 +1,1 @@
+{"lang":"cpp","driver":"libmysqlclient","driver_version":"8.0.46","runtime_version":"g++ 13.3.0","prepared":true,"client_host":"beast-node3.tp.int.percona.com","db_host":"127.0.0.1","threads":256,"txns":512000,"retries":0,"errors":0,"elapsed_s":17.700,"tps":28925.9,"qps":578518.0,"p50_us":8186,"p95_us":14871,"p99_us":19015,"max_us":60100}

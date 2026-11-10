@@ -1,0 +1,45 @@
+[mysqld]
+# Server configuration for HammerDB TPC-C benchmark
+
+# Data directory
+datadir=/home/bogdan.degtyariov/servers/data
+
+# Disable binary logging
+skip-log-bin
+
+# Connection settings (benchmark sweeps go up to 512 client threads)
+max_connections = 1000
+
+# Logging
+log-error = /home/bogdan.degtyariov/servers/data/mysql-error.log
+pid-file = /home/bogdan.degtyariov/servers/data/mysql.pid
+
+# Socket
+socket = /tmp/mysql-alloc-test.sock
+
+# Disable SSL requirement
+require_secure_transport = OFF
+
+# Other settings
+sql_mode = ""
+wait_timeout = 288000        # 80 hours
+interactive_timeout = 288000 # 80 hours
+
+# Table settings
+default-storage-engine = InnoDB
+
+# InnoDB redo log configuration
+innodb_redo_log_capacity = 32G
+
+# Minimize flush overhead (not crash-safe, but optimal for testing)
+innodb_flush_log_at_trx_commit = 0
+
+# Memory configuration
+innodb_buffer_pool_size = 64G
+innodb_buffer_pool_instances = 16
+innodb_io_capacity = 20000
+
+# Performance optimizations
+innodb_flush_method = O_DIRECT
+innodb_log_buffer_size = 256M
+innodb_doublewrite = OFF

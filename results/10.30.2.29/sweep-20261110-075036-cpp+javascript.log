@@ -1,0 +1,22 @@
+Table	Op	Msg_type	Msg_text
+bench.sbtest	analyze	status	OK
+table reloaded: 10000000 rows
+cpp t=4 ok
+cpp t=8 ok
+cpp t=16 ok
+cpp t=32 ok
+cpp t=64 ok
+cpp t=128 ok
+cpp t=256 ok
+cpp t=512 ok
+Table	Op	Msg_type	Msg_text
+bench.sbtest	analyze	status	OK
+table reloaded: 10000000 rows
+javascript t=4 ok
+javascript t=8 ok
+javascript t=16 ok
+javascript t=32 ok
+javascript t=64 ok
+javascript t=128 ok
+javascript t=256 ok
+javascript t=512 ok

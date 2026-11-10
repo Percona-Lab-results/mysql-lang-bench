@@ -1,0 +1,22 @@
+Table	Op	Msg_type	Msg_text
+bench.sbtest	analyze	status	OK
+table reloaded: 10000000 rows
+rust t=4 ok
+rust t=8 ok
+rust t=16 ok
+rust t=32 ok
+rust t=64 ok
+rust t=128 ok
+rust t=256 ok
+rust t=512 ok
+Table	Op	Msg_type	Msg_text
+bench.sbtest	analyze	status	OK
+table reloaded: 10000000 rows
+typescript t=4 ok
+typescript t=8 ok
+typescript t=16 ok
+typescript t=32 ok
+typescript t=64 ok
+typescript t=128 ok
+typescript t=256 ok
+typescript t=512 ok

@@ -1,0 +1,11 @@
+Table	Op	Msg_type	Msg_text
+bench.sbtest	analyze	status	OK
+table reloaded: 10000000 rows
+python t=4 ok
+python t=8 ok
+python t=16 ok
+python t=32 ok
+python t=64 ok
+python t=128 ok
+python t=256 ok
+python t=512 ok

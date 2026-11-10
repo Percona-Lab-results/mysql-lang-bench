@@ -1,0 +1,1 @@
+{"lang":"php","driver":"mysqli","driver_version":"mysqlnd 8.3.6","runtime_version":"8.3.6","prepared":true,"client_host":"beast-node7.tp.int.percona.com","db_host":"127.0.0.1","threads":512,"txns":1024000,"retries":0,"errors":0,"elapsed_s":43.37,"tps":23610.7,"qps":472213.1,"p50_us":20354,"p95_us":35668,"p99_us":57077,"max_us":457735}

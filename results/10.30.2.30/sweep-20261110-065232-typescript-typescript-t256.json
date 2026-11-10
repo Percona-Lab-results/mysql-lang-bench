@@ -1,0 +1,1 @@
+{"lang":"typescript","driver":"mysql2","driver_version":"3.24.6","runtime_version":"node v18.19.1 / tsc 5.9.3","prepared":true,"client_host":"beast-node4.tp.int.percona.com","db_host":"127.0.0.1","threads":256,"txns":512000,"retries":0,"errors":0,"elapsed_s":79.699,"tps":6424.2,"qps":128483.1,"p50_us":35093,"p95_us":78623,"p99_us":136417,"max_us":588913}

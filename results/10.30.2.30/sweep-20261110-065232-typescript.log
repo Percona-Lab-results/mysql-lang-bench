@@ -1,0 +1,11 @@
+Table	Op	Msg_type	Msg_text
+bench.sbtest	analyze	status	OK
+table reloaded: 10000000 rows
+typescript t=4 ok
+typescript t=8 ok
+typescript t=16 ok
+typescript t=32 ok
+typescript t=64 ok
+typescript t=128 ok
+typescript t=256 ok
+typescript t=512 ok

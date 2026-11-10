@@ -1,0 +1,34 @@
+Table	Op	Msg_type	Msg_text
+bench.sbtest	analyze	status	OK
+table reloaded: 10000000 rows
+cpp t=4 ok
+cpp t=8 ok
+cpp t=16 ok
+cpp t=32 ok
+cpp t=64 ok
+cpp t=128 ok
+cpp t=256 ok
+cpp t=512 ok
+Table	Op	Msg_type	Msg_text
+bench.sbtest	analyze	status	OK
+table reloaded: 10000000 rows
+javascript t=4 ok
+javascript t=8 ok
+javascript t=16 ok
+javascript t=32 ok
+javascript t=64 ok
+javascript t=128 ok
+javascript t=256 ok
+Error: worker 499 error: Error: EMFILE: too many open files, open '/home/bogdan.degtyariov/mysql-lang-bench/impl/javascript/node_modules/iconv-lite/encodings/index.js'
+    at workerRun (file:///home/bogdan.degtyariov/mysql-lang-bench/impl/javascript/bench.mjs:62:28)
+    at file:///home/bogdan.degtyariov/mysql-lang-bench/impl/javascript/bench.mjs:300:3
+    at ModuleJob.run (node:internal/modules/esm/module_job:195:25)
+    at async ModuleLoader.import (node:internal/modules/esm/loader:336:24)
+    at async loadESM (node:internal/process/esm_loader:34:7)
+    at async handleMainPromise (node:internal/modules/run_main:106:12)
+    at Worker.<anonymous> (file:///home/bogdan.degtyariov/mysql-lang-bench/impl/javascript/bench.mjs:224:18)
+    at Worker.emit (node:events:517:28)
+    at MessagePort.<anonymous> (node:internal/worker:256:53)
+    at [nodejs.internal.kHybridDispatch] (node:internal/event_target:786:20)
+    at exports.emitMessage (node:internal/per_context/messageport:23:28)
+javascript t=512 FAILED

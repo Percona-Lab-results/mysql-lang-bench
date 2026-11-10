@@ -1,0 +1,20 @@
+# live credentials (see config/mysql.env.example)
+config/mysql.env
+
+# build artifacts (created on the bench hosts by impl/*/build.sh)
+impl/rust/target/
+impl/javascript/node_modules/
+impl/typescript/node_modules/
+impl/typescript/dist/
+impl/csharp/bin/
+impl/csharp/obj/
+impl/swift/.build/
+impl/python/venv/
+impl/java/lib/
+impl/java/*.class
+impl/c/bench
+impl/cpp/bench
+impl/go/bench
+__pycache__/
+*.o
+*.pyc
