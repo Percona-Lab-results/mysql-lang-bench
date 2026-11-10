@@ -4,9 +4,8 @@
 Reads results/<host>/*.json (latest run per (lang, threads), v2 rows with CPU
 fields), embeds the data as JSON, and renders:
   - KPI stat tiles
-  - TPS vs threads: emphasis small multiples (one facet per language, all
-    other languages as gray ghost lines)
-  - CPU cost per transaction: small multiples with two series (client, server)
+  - TPS vs threads: one large multi-series line chart (hue x shape x dash)
+  - CPU cost per txn: one large chart (client lines + server min-max band)
   - Table views for all three matrices
 """
 import json
@@ -58,14 +57,15 @@ def main():
             cli.append(round(r["client_cpu_s"] / r["txns"] * 1e6))
             srv.append(round(r["server_cpu_s"] / r["txns"] * 1e6))
             drv = f'{r.get("driver", "")} {r.get("driver_version", "")}'.strip()
-            if len(drv) > 34:
-                drv = drv[:33] + "…"
         series.append({
             "lang": lang, "name": DISPLAY.get(lang, lang), "driver": drv,
             "tps": tps, "cli": cli, "srv": srv,
             "peak": max(v for v in tps if v is not None),
         })
     series.sort(key=lambda s: -s["peak"])
+
+    srv_lo = [min(s["srv"][i] for s in series) for i in range(len(threads))]
+    srv_hi = [max(s["srv"][i] for s in series) for i in range(len(threads))]
 
     best = series[0]
     peak_t = threads[best["tps"].index(best["peak"])]
@@ -75,7 +75,7 @@ def main():
     dear_v = max(v for v in dearest["cli"] if v is not None)
     srv_low = round(sum(s["srv"][0] for s in series) / len(series))
 
-    data = {"threads": threads, "series": series}
+    data = {"threads": threads, "series": series, "srvLo": srv_lo, "srvHi": srv_hi}
     kpis = [
         ("Peak throughput", f"{best['peak']:,.0f} tps", f"{best['name']} at {peak_t} threads"),
         ("Server CPU per txn", f"{srv_low / 1000:.1f} ms", "at 4 threads, near-uniform across languages"),
@@ -98,17 +98,13 @@ def main():
         return (f'<table><thead><tr><th>Language</th>{head}</tr></thead>'
                 f'<tbody>{body}</tbody></table>')
 
-    tbl_tps = table("tps", lambda v: f"{v:,.0f}")
-    tbl_cli = table("cli", lambda v: f"{v:,}")
-    tbl_srv = table("srv", lambda v: f"{v:,}")
-
     html = HTML_TEMPLATE
     for k, v in {
         "__DATA__": json.dumps(data, separators=(",", ":")),
         "__KPIS__": kpi_html,
-        "__TBL_TPS__": tbl_tps,
-        "__TBL_CLI__": tbl_cli,
-        "__TBL_SRV__": tbl_srv,
+        "__TBL_TPS__": table("tps", lambda v: f"{v:,.0f}"),
+        "__TBL_CLI__": table("cli", lambda v: f"{v:,}"),
+        "__TBL_SRV__": table("srv", lambda v: f"{v:,}"),
     }.items():
         html = html.replace(k, v)
     OUT.write_text(html)
@@ -126,9 +122,8 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
     color-scheme: light;
     --surface-1: #fcfcfb; --page: #f9f9f7;
     --text-primary: #0b0b0b; --text-secondary: #52514e; --muted: #898781;
-    --grid: #e1e0d9; --baseline: #c3c2b7; --ghost: #c9c8c0;
+    --grid: #e1e0d9; --baseline: #c3c2b7; --band: #898781;
     --border: rgba(11,11,11,0.10);
-    --series-1: #2a78d6; --series-2: #eb6834;
     --cat-1: #2a78d6; --cat-2: #eb6834; --cat-3: #1baf7a; --cat-4: #eda100;
     --cat-5: #e87ba4; --cat-6: #008300; --cat-7: #6250d6; --cat-8: #e34948;
   }
@@ -137,9 +132,8 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
       color-scheme: dark;
       --surface-1: #1a1a19; --page: #0d0d0d;
       --text-primary: #f0efec; --text-secondary: #c3c2b7; --muted: #898781;
-      --grid: #2c2c2a; --baseline: #383835; --ghost: #3d3d39;
+      --grid: #2c2c2a; --baseline: #383835; --band: #898781;
       --border: rgba(255,255,255,0.10);
-      --series-1: #3987e5; --series-2: #d95926;
       --cat-1: #3987e5; --cat-2: #d95926; --cat-3: #199e70; --cat-4: #c98500;
       --cat-5: #d55181; --cat-6: #008300; --cat-7: #9085e9; --cat-8: #e66767;
     }
@@ -148,9 +142,8 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
     color-scheme: dark;
     --surface-1: #1a1a19; --page: #0d0d0d;
     --text-primary: #f0efec; --text-secondary: #c3c2b7; --muted: #898781;
-    --grid: #2c2c2a; --baseline: #383835; --ghost: #3d3d39;
+    --grid: #2c2c2a; --baseline: #383835; --band: #898781;
     --border: rgba(255,255,255,0.10);
-    --series-1: #3987e5; --series-2: #d95926;
     --cat-1: #3987e5; --cat-2: #d95926; --cat-3: #199e70; --cat-4: #c98500;
     --cat-5: #d55181; --cat-6: #008300; --cat-7: #9085e9; --cat-8: #e66767;
   }
@@ -177,29 +170,21 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
   section { margin-top: 34px; }
   h2 { font-size: 16px; margin: 0 0 2px; }
   .sub { color: var(--text-secondary); margin: 0 0 14px; max-width: 80ch; }
-  .legend { display: flex; gap: 18px; align-items: center; margin: 0 0 10px; color: var(--text-secondary); font-size: 13px; flex-wrap: wrap; }
-  .legend .key { display: inline-block; width: 18px; height: 0; border-top: 2.5px solid; border-radius: 2px; margin-right: 6px; vertical-align: middle; }
-  .legend .key.dashed { border-top-style: dashed; }
+  .legend { display: flex; gap: 16px; align-items: center; margin: 0 0 10px; color: var(--text-secondary); font-size: 13px; flex-wrap: wrap; }
+  .legend .item { display: inline-flex; align-items: center; gap: 6px; }
+  .legend svg, #tooltip svg { display: inline-block; vertical-align: middle; }
   .bigchart { background: var(--surface-1); border: 1px solid var(--border); border-radius: 10px; padding: 14px 16px 8px; }
   .bigchart svg { display: block; width: 100%; height: auto; }
-  .bigchart svg:focus { outline: 2px solid var(--series-1); outline-offset: 2px; border-radius: 4px; }
-  svg .seriesname { fill: var(--text-secondary); font-weight: 600; font-size: 11.5px; }
-  .facets { display: grid; grid-template-columns: repeat(auto-fill, minmax(255px, 1fr)); gap: 14px; }
-  .facet { background: var(--surface-1); border: 1px solid var(--border); border-radius: 10px; padding: 10px 12px 6px; }
-  .facet h3 { font-size: 13px; font-weight: 600; margin: 0; }
-  .facet .drv { color: var(--muted); font-size: 11px; margin: 0 0 4px; }
-  .facet svg { display: block; width: 100%; height: auto; }
-  .facet svg:focus { outline: 2px solid var(--series-1); outline-offset: 2px; border-radius: 4px; }
+  .bigchart svg:focus { outline: 2px solid var(--cat-1); outline-offset: 2px; border-radius: 4px; }
   svg text { font-family: inherit; font-size: 10.5px; fill: var(--muted); font-variant-numeric: tabular-nums; }
-  svg .endlab { fill: var(--text-secondary); font-weight: 600; font-size: 11px; }
+  svg .seriesname { fill: var(--text-secondary); font-weight: 600; font-size: 11.5px; }
   #tooltip {
     position: fixed; pointer-events: none; z-index: 10; display: none;
     background: var(--surface-1); border: 1px solid var(--border); border-radius: 8px;
-    box-shadow: 0 4px 14px rgba(0,0,0,0.18); padding: 8px 11px; font-size: 12.5px; min-width: 130px;
+    box-shadow: 0 4px 14px rgba(0,0,0,0.18); padding: 8px 11px; font-size: 12.5px; min-width: 150px;
   }
   #tooltip .tt-title { color: var(--muted); margin-bottom: 4px; }
   #tooltip .tt-row { display: flex; align-items: center; gap: 7px; margin-top: 2px; }
-  #tooltip .tt-key { width: 14px; height: 0; border-top: 2.5px solid; border-radius: 2px; flex: none; }
   #tooltip .tt-val { font-weight: 600; color: var(--text-primary); font-variant-numeric: tabular-nums; }
   #tooltip .tt-name { color: var(--text-secondary); }
   details.tables { margin-top: 16px; }
@@ -234,8 +219,8 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
   <section>
     <h2>Throughput by worker count</h2>
     <p class="sub">All languages on one chart, transactions per second against worker count.
-    Lines are named at their right end; dashed lines reuse a hue (9th&ndash;11th series).
-    Hover anywhere for every language&rsquo;s value at that worker count.</p>
+    Each language keeps a fixed color, marker shape and line style everywhere in this report;
+    lines are also named at their right end. Hover for every language&rsquo;s value.</p>
     <div class="legend" id="tps-legend"></div>
     <div class="bigchart" id="tps-big"></div>
     <details class="tables"><summary>Table view — transactions per second</summary>
@@ -244,14 +229,12 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
 
   <section>
     <h2>CPU cost per transaction</h2>
-    <p class="sub">CPU seconds consumed per committed transaction, split between the
-    benchmark client and mysqld, measured over the same window on the same host.
-    Server cost is near-uniform across languages — the client lines are the language story.</p>
-    <div class="legend">
-      <span><span class="key" style="border-color: var(--series-1)"></span>Client (benchmark process)</span>
-      <span><span class="key" style="border-color: var(--series-2)"></span>Server (mysqld)</span>
-    </div>
-    <div class="facets" id="cpu-facets"></div>
+    <p class="sub">Client CPU microseconds per committed transaction — same color, shape and
+    line style per language as above. The gray band is the server (mysqld) cost across all
+    languages, min to max, on the same axis: near-uniform, because every client executes the
+    same statements.</p>
+    <div class="legend" id="cpu-legend"></div>
+    <div class="bigchart" id="cpu-big"></div>
     <details class="tables"><summary>Table view — client CPU &micro;s per transaction</summary>
       <div class="tablewrap">__TBL_CLI__</div></details>
     <details class="tables"><summary>Table view — server CPU &micro;s per transaction</summary>
@@ -299,12 +282,7 @@ const DATA = __DATA__;
 (function () {
   "use strict";
   const T = DATA.threads, N = T.length;
-  const W = 290, H = 170, M = { l: 40, r: 56, t: 10, b: 24 };
-  const IW = W - M.l - M.r, IH = H - M.t - M.b;
-  const X = i => M.l + (N === 1 ? IW / 2 : i * IW / (N - 1));
   const tooltip = document.getElementById("tooltip");
-  // One tick style per axis: compact every tick when the axis reaches 10K.
-  const fmtAxis = (v, axisMax) => v === 0 ? "0" : axisMax >= 10000 ? (v / 1000) + "K" : v.toLocaleString("en-US");
   const fmt = v => v >= 10000 ? Math.round(v / 1000) + "K" : Math.round(v).toLocaleString("en-US");
   const fmtFull = v => Math.round(v).toLocaleString("en-US");
   const ns = "http://www.w3.org/2000/svg";
@@ -314,49 +292,108 @@ const DATA = __DATA__;
     return e;
   };
 
-  function niceTicks(max) {
-    const step = max > 20000 ? 10000 : max > 8000 ? 4000 : max > 2000 ? 1000 : 500;
-    const out = [];
-    for (let v = 0; v <= max; v += step) out.push(v);
-    return out;
+  // Identity encoding, fixed per language everywhere in the report:
+  // hue = slot (i mod 8), shape = i mod 5, dash on hue reuse (i >= 8).
+  // No two languages share both hue and shape (collision needs i≡j mod 40).
+  const SHAPES = ["circle", "square", "triangle", "diamond", "tridown"];
+  const styleFor = i => ({
+    color: `var(--cat-${(i % 8) + 1})`,
+    dash: i >= 8 ? "7 5" : null,
+    shape: SHAPES[i % 5],
+  });
+
+  // Marker: >= 8px across, 2px surface ring so it reads over lines.
+  function shapeNode(shape, x, y, color, surface) {
+    const common = { fill: color, stroke: surface, "stroke-width": 2 };
+    const s = 4.6; // half-extent
+    if (shape === "circle") return el("circle", { cx: x, cy: y, r: s, ...common });
+    if (shape === "square") return el("rect", { x: x - s + 0.4, y: y - s + 0.4, width: 2 * s - 0.8, height: 2 * s - 0.8, rx: 1, ...common });
+    if (shape === "triangle") return el("path", { d: `M ${x} ${y - s - 0.6} L ${x + s + 0.4} ${y + s - 0.4} L ${x - s - 0.4} ${y + s - 0.4} Z`, ...common });
+    if (shape === "tridown") return el("path", { d: `M ${x} ${y + s + 0.6} L ${x + s + 0.4} ${y - s + 0.4} L ${x - s - 0.4} ${y - s + 0.4} Z`, ...common });
+    return el("path", { d: `M ${x} ${y - s - 1} L ${x + s + 1} ${y} L ${x} ${y + s + 1} L ${x - s - 1} ${y} Z`, ...common }); // diamond
   }
 
-  // svgFor: builds one facet svg with grid, axes, series lines, crosshair + hover.
-  // seriesDefs: [{vals, color(css var), ghost:bool, marker:bool, endLabel:bool}]
-  // ttRows(i): [{color, value, name}]
-  function facetSVG(seriesDefs, yMax, ttRows, ariaLabel) {
-    const svg = el("svg", { viewBox: `0 0 ${W} ${H}`, tabindex: "0", role: "img", "aria-label": ariaLabel });
-    const Y = v => M.t + IH - (v / yMax) * IH;
-    for (const tv of niceTicks(yMax)) {
-      svg.appendChild(el("line", { x1: M.l, x2: W - M.r, y1: Y(tv), y2: Y(tv), stroke: "var(--grid)", "stroke-width": 1 }));
-      const t = el("text", { x: M.l - 5, y: Y(tv) + 3.5, "text-anchor": "end" });
-      t.textContent = fmtAxis(tv, yMax);
+  // Legend / tooltip key: a short stroke (dash rendered exactly as in the
+  // chart) with the series marker on it — CSS dashed borders render nearly
+  // solid at this size, so keys are real SVG.
+  function keySVG(st, w, h) {
+    const svg = el("svg", { width: w, height: h, viewBox: `0 0 ${w} ${h}`, "aria-hidden": "true" });
+    const line = el("line", { x1: 1, x2: w - 1, y1: h / 2, y2: h / 2, stroke: st.color, "stroke-width": 2, "stroke-linecap": "round" });
+    if (st.dash) line.setAttribute("stroke-dasharray", "5 4");
+    svg.appendChild(line);
+    svg.appendChild(shapeNode(st.shape, w / 2, h / 2, st.color, "var(--surface-1)"));
+    return svg;
+  }
+
+  function legendInto(hostId, entries) {
+    const leg = document.getElementById(hostId);
+    for (const e of entries) {
+      const item = document.createElement("span");
+      item.className = "item";
+      item.appendChild(e.key);
+      item.appendChild(document.createTextNode(e.name));
+      leg.appendChild(item);
+    }
+  }
+
+  // One large multi-series line chart with optional context band.
+  // cfg: {hostId, seriesDefs:[{name, vals, st}], yMax, yStep, unit,
+  //       band: {lo, hi, name} | null, ariaLabel}
+  function bigChart(cfg) {
+    const BW = 1120, BH = 540, BM = { l: 56, r: 170, t: 14, b: 32 };
+    const BIW = BW - BM.l - BM.r, BIH = BH - BM.t - BM.b;
+    const X = i => BM.l + i * BIW / (N - 1);
+    const Y = v => BM.t + BIH - (v / cfg.yMax) * BIH;
+    const svg = el("svg", { viewBox: `0 0 ${BW} ${BH}`, tabindex: "0", role: "img", "aria-label": cfg.ariaLabel });
+    for (let tv = 0; tv <= cfg.yMax; tv += cfg.yStep) {
+      svg.appendChild(el("line", { x1: BM.l, x2: BW - BM.r, y1: Y(tv), y2: Y(tv), stroke: "var(--grid)", "stroke-width": 1 }));
+      const t = el("text", { x: BM.l - 6, y: Y(tv) + 3.5, "text-anchor": "end" });
+      t.textContent = tv === 0 ? "0" : (cfg.yMax >= 10000 ? (tv / 1000) + "K" : tv.toLocaleString("en-US"));
       svg.appendChild(t);
     }
-    svg.appendChild(el("line", { x1: M.l, x2: W - M.r, y1: M.t + IH, y2: M.t + IH, stroke: "var(--baseline)", "stroke-width": 1 }));
-    for (const ti of [0, 3, 5, 7]) {
-      if (ti >= N) continue;
-      const t = el("text", { x: X(ti), y: H - 8, "text-anchor": "middle" });
-      t.textContent = T[ti];
+    svg.appendChild(el("line", { x1: BM.l, x2: BW - BM.r, y1: BM.t + BIH, y2: BM.t + BIH, stroke: "var(--baseline)", "stroke-width": 1 }));
+    for (let i = 0; i < N; i++) {
+      const t = el("text", { x: X(i), y: BH - 12, "text-anchor": "middle" });
+      t.textContent = T[i];
       svg.appendChild(t);
+    }
+    if (cfg.band) {
+      const up = cfg.band.hi.map((v, i) => (i ? "L" : "M") + X(i).toFixed(1) + " " + Y(v).toFixed(1)).join(" ");
+      const down = cfg.band.lo.map((v, i) => "L" + X(N - 1 - i).toFixed(1) + " " + Y(cfg.band.lo[N - 1 - i]).toFixed(1)).join(" ");
+      svg.appendChild(el("path", { d: up + " " + down + " Z", fill: "var(--band)", opacity: 0.16, stroke: "none" }));
     }
     const path = vals => vals.map((v, i) => (i ? "L" : "M") + X(i).toFixed(1) + " " + Y(v).toFixed(1)).join(" ");
-    for (const s of seriesDefs.filter(s => s.ghost)) {
-      svg.appendChild(el("path", { d: path(s.vals), fill: "none", stroke: "var(--ghost)", "stroke-width": 1.5, "stroke-linejoin": "round", "stroke-linecap": "round" }));
-    }
-    for (const s of seriesDefs.filter(s => !s.ghost)) {
-      svg.appendChild(el("path", { d: path(s.vals), fill: "none", stroke: s.color, "stroke-width": 2, "stroke-linejoin": "round", "stroke-linecap": "round" }));
-      if (s.marker) {
-        svg.appendChild(el("circle", { cx: X(N - 1), cy: Y(s.vals[N - 1]), r: 4, fill: s.color, stroke: "var(--surface-1)", "stroke-width": 2 }));
-      }
-      if (s.endLabel) {
-        const t = el("text", { x: X(N - 1) + 8, y: Y(s.vals[N - 1]) + 3.5, class: "endlab" });
-        t.textContent = fmt(s.vals[N - 1]);
-        svg.appendChild(t);
+    for (let si = cfg.seriesDefs.length - 1; si >= 0; si--) {
+      const d = cfg.seriesDefs[si];
+      const attrs = { d: path(d.vals), fill: "none", stroke: d.st.color, "stroke-width": 2, "stroke-linejoin": "round", "stroke-linecap": "round" };
+      if (d.st.dash) attrs["stroke-dasharray"] = d.st.dash;
+      svg.appendChild(el("path", attrs));
+      for (let i = 0; i < N; i++) {
+        svg.appendChild(shapeNode(d.st.shape, X(i), Y(d.vals[i]), d.st.color, "var(--surface-1)"));
       }
     }
-    // hover layer: crosshair snapping to nearest thread index
-    const cross = el("line", { y1: M.t, y2: M.t + IH, stroke: "var(--baseline)", "stroke-width": 1, visibility: "hidden" });
+    // collision-resolved end labels with leader lines
+    const labels = cfg.seriesDefs.map(d => ({ d, endY: Y(d.vals[N - 1]), y: Y(d.vals[N - 1]) }))
+      .sort((a, b) => a.y - b.y);
+    if (cfg.band) labels.push({ band: true, endY: Y((cfg.band.lo[N - 1] + cfg.band.hi[N - 1]) / 2), y: Y((cfg.band.lo[N - 1] + cfg.band.hi[N - 1]) / 2) });
+    labels.sort((a, b) => a.y - b.y);
+    const GAPL = 16;
+    for (let k = 1; k < labels.length; k++) {
+      if (labels[k].y - labels[k - 1].y < GAPL) labels[k].y = labels[k - 1].y + GAPL;
+    }
+    const over = labels[labels.length - 1].y - (BM.t + BIH + 6);
+    if (over > 0) for (const L of labels) L.y -= over * (L.y - BM.t) / BIH;
+    for (const L of labels) {
+      if (Math.abs(L.y - L.endY) > 3) {
+        svg.appendChild(el("line", { x1: X(N - 1) + 7, y1: L.endY, x2: X(N - 1) + 22, y2: L.y, stroke: "var(--baseline)", "stroke-width": 1 }));
+      }
+      const t = el("text", { x: X(N - 1) + 26, y: L.y + 3.5, class: "seriesname" });
+      t.textContent = L.band ? cfg.band.name : L.d.name + "  " + fmt(L.d.vals[N - 1]);
+      if (L.band) t.setAttribute("fill", "var(--muted)");
+      svg.appendChild(t);
+    }
+    // hover: crosshair + ranked all-series tooltip; keyboard navigable
+    const cross = el("line", { y1: BM.t, y2: BM.t + BIH, stroke: "var(--baseline)", "stroke-width": 1, visibility: "hidden" });
     svg.appendChild(cross);
     let idx = N - 1;
     function show(i, cx, cy) {
@@ -365,135 +402,25 @@ const DATA = __DATA__;
       cross.setAttribute("visibility", "visible");
       tooltip.replaceChildren();
       const title = document.createElement("div");
-      title.className = "tt-title";
-      title.textContent = T[i] + " threads";
-      tooltip.appendChild(title);
-      for (const r of ttRows(i)) {
-        const row = document.createElement("div"); row.className = "tt-row";
-        const key = document.createElement("span"); key.className = "tt-key"; key.style.borderColor = r.color;
-        const val = document.createElement("span"); val.className = "tt-val"; val.textContent = r.value;
-        const name = document.createElement("span"); name.className = "tt-name"; name.textContent = r.name;
-        row.append(key, val, name); tooltip.appendChild(row);
-      }
-      tooltip.style.display = "block";
-      const tw = tooltip.offsetWidth, pad = 14;
-      let left = cx + pad;
-      if (left + tw > window.innerWidth - 8) left = cx - tw - pad;
-      tooltip.style.left = left + "px";
-      tooltip.style.top = Math.max(8, cy - 10) + "px";
-    }
-    function hide() { cross.setAttribute("visibility", "hidden"); tooltip.style.display = "none"; }
-    svg.addEventListener("pointermove", ev => {
-      const rect = svg.getBoundingClientRect();
-      const px = (ev.clientX - rect.left) * (W / rect.width);
-      let best = 0, bd = Infinity;
-      for (let i = 0; i < N; i++) { const d = Math.abs(px - X(i)); if (d < bd) { bd = d; best = i; } }
-      show(best, ev.clientX, ev.clientY);
-    });
-    svg.addEventListener("pointerleave", hide);
-    svg.addEventListener("focus", () => {
-      const r = svg.getBoundingClientRect();
-      show(idx, r.left + (X(idx) * r.width / W), r.top + r.height / 2);
-    });
-    svg.addEventListener("blur", hide);
-    svg.addEventListener("keydown", ev => {
-      if (ev.key === "ArrowRight" || ev.key === "ArrowLeft") {
-        ev.preventDefault();
-        const i = Math.min(N - 1, Math.max(0, idx + (ev.key === "ArrowRight" ? 1 : -1)));
-        const r = svg.getBoundingClientRect();
-        show(i, r.left + (X(i) * r.width / W), r.top + r.height / 2);
-      } else if (ev.key === "Escape") hide();
-    });
-    return svg;
-  }
-
-  function facetCard(s, svg) {
-    const card = document.createElement("div");
-    card.className = "facet";
-    const h = document.createElement("h3"); h.textContent = s.name;
-    const d = document.createElement("p"); d.className = "drv"; d.textContent = s.driver;
-    card.append(h, d, svg);
-    return card;
-  }
-
-  // --- TPS: one large multi-series chart -----------------------------------
-  // 11 series: the 8 validated categorical slots, then dashed repeats of
-  // slots 1-3 (composite encoding). Identity is never color-alone: every line
-  // is direct-labeled at its end, listed in the legend, and in the tooltip.
-  const styleFor = i => ({
-    color: `var(--cat-${(i % 8) + 1})`,
-    dash: i >= 8 ? "7 5" : null,
-  });
-  (function bigTPS() {
-    const BW = 1120, BH = 540, BM = { l: 56, r: 170, t: 14, b: 32 };
-    const BIW = BW - BM.l - BM.r, BIH = BH - BM.t - BM.b;
-    const yMax = Math.ceil(Math.max(...DATA.series.map(s => Math.max(...s.tps))) / 10000) * 10000;
-    const BX = i => BM.l + i * BIW / (N - 1);
-    const BY = v => BM.t + BIH - (v / yMax) * BIH;
-    const svg = el("svg", { viewBox: `0 0 ${BW} ${BH}`, tabindex: "0", role: "img",
-      "aria-label": "Transactions per second by worker count, all languages" });
-    for (let tv = 0; tv <= yMax; tv += 5000) {
-      svg.appendChild(el("line", { x1: BM.l, x2: BW - BM.r, y1: BY(tv), y2: BY(tv), stroke: "var(--grid)", "stroke-width": 1 }));
-      const t = el("text", { x: BM.l - 6, y: BY(tv) + 3.5, "text-anchor": "end" });
-      t.textContent = tv === 0 ? "0" : (tv / 1000) + "K";
-      svg.appendChild(t);
-    }
-    svg.appendChild(el("line", { x1: BM.l, x2: BW - BM.r, y1: BM.t + BIH, y2: BM.t + BIH, stroke: "var(--baseline)", "stroke-width": 1 }));
-    for (let i = 0; i < N; i++) {
-      const t = el("text", { x: BX(i), y: BH - 12, "text-anchor": "middle" });
-      t.textContent = T[i];
-      svg.appendChild(t);
-    }
-    // lines (draw in reverse peak order so the leaders render on top)
-    const path = vals => vals.map((v, i) => (i ? "L" : "M") + BX(i).toFixed(1) + " " + BY(v).toFixed(1)).join(" ");
-    for (let si = DATA.series.length - 1; si >= 0; si--) {
-      const s = DATA.series[si], st = styleFor(si);
-      const attrs = { d: path(s.tps), fill: "none", stroke: st.color, "stroke-width": 2, "stroke-linejoin": "round", "stroke-linecap": "round" };
-      if (st.dash) attrs["stroke-dasharray"] = st.dash;
-      svg.appendChild(el("path", attrs));
-    }
-    // end markers + collision-resolved name labels with leader lines
-    const labels = DATA.series.map((s, si) => ({
-      s, si, endY: BY(s.tps[N - 1]), y: BY(s.tps[N - 1]),
-    })).sort((a, b) => a.y - b.y);
-    const GAPL = 16;
-    for (let k = 1; k < labels.length; k++) {
-      if (labels[k].y - labels[k - 1].y < GAPL) labels[k].y = labels[k - 1].y + GAPL;
-    }
-    const over = labels[labels.length - 1].y - (BM.t + BIH + 6);
-    if (over > 0) for (const L of labels) L.y -= over * (L.y - BM.t) / (BM.t + BIH - BM.t);
-    for (const L of labels) {
-      const st = styleFor(L.si);
-      svg.appendChild(el("circle", { cx: BX(N - 1), cy: L.endY, r: 4, fill: st.color, stroke: "var(--surface-1)", "stroke-width": 2 }));
-      if (Math.abs(L.y - L.endY) > 3) {
-        svg.appendChild(el("line", { x1: BX(N - 1) + 7, y1: L.endY, x2: BX(N - 1) + 22, y2: L.y, stroke: "var(--baseline)", "stroke-width": 1 }));
-      }
-      const t = el("text", { x: BX(N - 1) + 26, y: L.y + 3.5, class: "seriesname" });
-      t.textContent = L.s.name + "  " + fmt(L.s.tps[N - 1]);
-      svg.appendChild(t);
-    }
-    // hover: crosshair + all-series tooltip, keyboard navigable
-    const cross = el("line", { y1: BM.t, y2: BM.t + BIH, stroke: "var(--baseline)", "stroke-width": 1, visibility: "hidden" });
-    svg.appendChild(cross);
-    let idx = N - 1;
-    function show(i, cx, cy) {
-      idx = i;
-      cross.setAttribute("x1", BX(i)); cross.setAttribute("x2", BX(i));
-      cross.setAttribute("visibility", "visible");
-      tooltip.replaceChildren();
-      const title = document.createElement("div");
       title.className = "tt-title"; title.textContent = T[i] + " threads";
       tooltip.appendChild(title);
-      const ranked = DATA.series.map((s, si) => ({ s, si })).sort((a, b) => b.s.tps[i] - a.s.tps[i]);
-      for (const { s, si } of ranked) {
-        const st = styleFor(si);
+      const ranked = cfg.seriesDefs.slice().sort((a, b) => b.vals[i] - a.vals[i]);
+      for (const d of ranked) {
         const row = document.createElement("div"); row.className = "tt-row";
-        const key = document.createElement("span"); key.className = "tt-key" + (st.dash ? " dashed" : "");
-        key.style.borderColor = st.color;
-        if (st.dash) key.style.borderTopStyle = "dashed";
-        const val = document.createElement("span"); val.className = "tt-val"; val.textContent = fmtFull(s.tps[i]);
-        const name = document.createElement("span"); name.className = "tt-name"; name.textContent = s.name;
-        row.append(key, val, name); tooltip.appendChild(row);
+        row.appendChild(keySVG(d.st, 20, 11));
+        const val = document.createElement("span"); val.className = "tt-val";
+        val.textContent = fmtFull(d.vals[i]) + (cfg.unit ? " " + cfg.unit : "");
+        const name = document.createElement("span"); name.className = "tt-name"; name.textContent = d.name;
+        row.append(val, name); tooltip.appendChild(row);
+      }
+      if (cfg.band) {
+        const row = document.createElement("div"); row.className = "tt-row";
+        const sw = document.createElement("span");
+        sw.style.cssText = "width:20px;height:9px;background:var(--band);opacity:.25;border-radius:2px;flex:none;";
+        const val = document.createElement("span"); val.className = "tt-val";
+        val.textContent = fmtFull(DATA.srvLo[i]) + "–" + fmtFull(DATA.srvHi[i]) + (cfg.unit ? " " + cfg.unit : "");
+        const name = document.createElement("span"); name.className = "tt-name"; name.textContent = cfg.band.name;
+        row.append(sw, val, name); tooltip.appendChild(row);
       }
       tooltip.style.display = "block";
       const tw = tooltip.offsetWidth, th = tooltip.offsetHeight, pad = 14;
@@ -507,13 +434,13 @@ const DATA = __DATA__;
       const rect = svg.getBoundingClientRect();
       const px = (ev.clientX - rect.left) * (BW / rect.width);
       let best = 0, bd = Infinity;
-      for (let i = 0; i < N; i++) { const d = Math.abs(px - BX(i)); if (d < bd) { bd = d; best = i; } }
+      for (let i = 0; i < N; i++) { const d = Math.abs(px - X(i)); if (d < bd) { bd = d; best = i; } }
       show(best, ev.clientX, ev.clientY);
     });
     svg.addEventListener("pointerleave", hide);
     svg.addEventListener("focus", () => {
       const r = svg.getBoundingClientRect();
-      show(idx, r.left + (BX(idx) * r.width / BW), r.top + r.height / 3);
+      show(idx, r.left + (X(idx) * r.width / BW), r.top + r.height / 3);
     });
     svg.addEventListener("blur", hide);
     svg.addEventListener("keydown", ev => {
@@ -521,40 +448,35 @@ const DATA = __DATA__;
         ev.preventDefault();
         const i = Math.min(N - 1, Math.max(0, idx + (ev.key === "ArrowRight" ? 1 : -1)));
         const r = svg.getBoundingClientRect();
-        show(i, r.left + (BX(i) * r.width / BW), r.top + r.height / 3);
+        show(i, r.left + (X(i) * r.width / BW), r.top + r.height / 3);
       } else if (ev.key === "Escape") hide();
     });
-    document.getElementById("tps-big").appendChild(svg);
-    // legend (line keys mirror the mark: solid/dashed stroke of the hue)
-    const leg = document.getElementById("tps-legend");
-    DATA.series.forEach((s, si) => {
-      const st = styleFor(si);
-      const item = document.createElement("span");
-      const key = document.createElement("span");
-      key.className = "key" + (st.dash ? " dashed" : "");
-      key.style.borderColor = st.color;
-      item.appendChild(key);
-      item.appendChild(document.createTextNode(s.name));
-      leg.appendChild(item);
-    });
-  })();
-
-  // --- CPU small multiples (client + server) ---
-  const cpuMax = Math.max(...DATA.series.map(s => Math.max(...s.cli, ...s.srv)));
-  const cpuHost = document.getElementById("cpu-facets");
-  for (const s of DATA.series) {
-    const defs = [
-      { vals: s.srv, color: "var(--series-2)", marker: true },
-      { vals: s.cli, color: "var(--series-1)", marker: true, endLabel: true },
-    ];
-    const svg = facetSVG(defs, Math.ceil(cpuMax / 4000) * 4000,
-      i => [
-        { color: "var(--series-1)", value: fmtFull(s.cli[i]) + " µs", name: "client" },
-        { color: "var(--series-2)", value: fmtFull(s.srv[i]) + " µs", name: "server" },
-      ],
-      s.name + ": client and server CPU microseconds per transaction");
-    cpuHost.appendChild(facetCard(s, svg));
+    document.getElementById(cfg.hostId).appendChild(svg);
   }
+
+  const defsFor = key => DATA.series.map((s, si) => ({ name: s.name, vals: s[key], st: styleFor(si) }));
+  const langLegend = DATA.series.map((s, si) => ({ name: s.name, key: keySVG(styleFor(si), 26, 12) }));
+
+  // --- TPS: one large chart -------------------------------------------------
+  const tpsMax = Math.ceil(Math.max(...DATA.series.map(s => Math.max(...s.tps))) / 10000) * 10000;
+  legendInto("tps-legend", langLegend);
+  bigChart({
+    hostId: "tps-big", seriesDefs: defsFor("tps"), yMax: tpsMax, yStep: 5000,
+    unit: "tps", band: null,
+    ariaLabel: "Transactions per second by worker count, all languages",
+  });
+
+  // --- CPU: one large chart (client lines + server band) -------------------
+  const cpuMax = Math.ceil(Math.max(...DATA.series.map(s => Math.max(...s.cli)), ...DATA.srvHi) / 2000) * 2000;
+  const bandKey = document.createElement("span");
+  bandKey.style.cssText = "width:26px;height:10px;background:var(--band);opacity:.25;border-radius:2px;display:inline-block;";
+  legendInto("cpu-legend", DATA.series.map((s, si) => ({ name: s.name, key: keySVG(styleFor(si), 26, 12) }))
+    .concat([{ name: "Server (mysqld), min–max", key: bandKey }]));
+  bigChart({
+    hostId: "cpu-big", seriesDefs: defsFor("cli"), yMax: cpuMax, yStep: 2000,
+    unit: "µs", band: { lo: DATA.srvLo, hi: DATA.srvHi, name: "Server (mysqld)" },
+    ariaLabel: "Client CPU microseconds per transaction by worker count, all languages, with server CPU range band",
+  });
 
   // --- theme toggle ---
   document.getElementById("theme-toggle").addEventListener("click", () => {
