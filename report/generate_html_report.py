@@ -298,18 +298,20 @@ const DATA = __DATA__;
   // Identity encoding, fixed per LANGUAGE (color follows the entity, never
   // its rank): every language has a unique solid hue; marker shape is the
   // secondary identity channel.
+  // Circle and square are used once each; the remaining shapes repeat at most
+  // twice, always pairing strongly contrasting hues.
   const STYLE = {
     c:          { slot: 1,  shape: "circle"   }, // blue
     cpp:        { slot: 2,  shape: "square"   }, // orange
     swift:      { slot: 3,  shape: "triangle" }, // aqua
     rust:       { slot: 8,  shape: "diamond"  }, // red
     php:        { slot: 5,  shape: "tridown"  }, // magenta
-    java:       { slot: 6,  shape: "circle"   }, // green
-    csharp:     { slot: 11, shape: "square"   }, // brown
-    go:         { slot: 10, shape: "triangle" }, // cyan
-    javascript: { slot: 4,  shape: "diamond"  }, // yellow
-    typescript: { slot: 9,  shape: "tridown"  }, // lime
-    python:     { slot: 7,  shape: "circle"   }, // purple
+    java:       { slot: 6,  shape: "plus"     }, // green
+    csharp:     { slot: 11, shape: "star"     }, // brown
+    go:         { slot: 10, shape: "diamond"  }, // cyan   (vs rust red)
+    javascript: { slot: 4,  shape: "tridown"  }, // yellow (vs php magenta)
+    typescript: { slot: 9,  shape: "star"     }, // lime   (vs csharp brown)
+    python:     { slot: 7,  shape: "plus"     }, // purple (vs java green)
   };
   const styleFor = lang => {
     const s = STYLE[lang] || { slot: 1, shape: "circle" };
@@ -318,12 +320,25 @@ const DATA = __DATA__;
 
   // Marker: >= 8px across, 2px surface ring so it reads over lines.
   function shapeNode(shape, x, y, color, surface) {
-    const common = { fill: color, stroke: surface, "stroke-width": 2 };
+    const common = { fill: color, stroke: surface, "stroke-width": 2, "stroke-linejoin": "round" };
     const s = 4.6; // half-extent
     if (shape === "circle") return el("circle", { cx: x, cy: y, r: s, ...common });
     if (shape === "square") return el("rect", { x: x - s + 0.4, y: y - s + 0.4, width: 2 * s - 0.8, height: 2 * s - 0.8, rx: 1, ...common });
     if (shape === "triangle") return el("path", { d: `M ${x} ${y - s - 0.6} L ${x + s + 0.4} ${y + s - 0.4} L ${x - s - 0.4} ${y + s - 0.4} Z`, ...common });
     if (shape === "tridown") return el("path", { d: `M ${x} ${y + s + 0.6} L ${x + s + 0.4} ${y - s + 0.4} L ${x - s - 0.4} ${y - s + 0.4} Z`, ...common });
+    if (shape === "plus") {
+      const a = 1.9, p = s + 1;
+      return el("path", { d: `M ${x - a} ${y - p} H ${x + a} V ${y - a} H ${x + p} V ${y + a} H ${x + a} V ${y + p} H ${x - a} V ${y + a} H ${x - p} V ${y - a} H ${x - a} Z`, ...common });
+    }
+    if (shape === "star") {
+      const ro = s + 1.6, ri = 2.4, pts = [];
+      for (let k = 0; k < 10; k++) {
+        const r = k % 2 === 0 ? ro : ri;
+        const ang = -Math.PI / 2 + k * Math.PI / 5;
+        pts.push((x + r * Math.cos(ang)).toFixed(2) + " " + (y + r * Math.sin(ang)).toFixed(2));
+      }
+      return el("path", { d: "M " + pts.join(" L ") + " Z", ...common });
+    }
     return el("path", { d: `M ${x} ${y - s - 1} L ${x + s + 1} ${y} L ${x} ${y + s + 1} L ${x - s - 1} ${y} Z`, ...common }); // diamond
   }
 
