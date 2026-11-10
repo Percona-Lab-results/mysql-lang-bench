@@ -147,6 +147,7 @@ retries are not reported — reset the counter after warmup); `errors` always 0
 | go         | go-sql-driver/mysql       | goroutines, each with a dedicated sql.Conn |
 | javascript | Node.js `mysql2`          | worker_threads, one connection per worker  |
 | typescript | Node.js `mysql2` (tsc-compiled) | worker_threads, one connection per worker |
+| ruby       | `mysql2` gem (libmysqlclient) | Thread (GVL released during queries, Python-style) |
 | csharp     | MySqlConnector (.NET 8)   | System.Threading.Thread, Pooling=false, cmd.Prepare() |
 | swift      | libmysqlclient C API (C interop) | OS threads (pthread barrier), same API usage as C/C++ |
 

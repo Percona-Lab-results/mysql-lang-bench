@@ -18,7 +18,7 @@ OUT = ROOT / "report" / "report.html"
 DISPLAY = {
     "c": "C", "cpp": "C++", "swift": "Swift", "rust": "Rust", "php": "PHP",
     "java": "Java", "csharp": "C#", "go": "Go", "javascript": "JavaScript",
-    "typescript": "TypeScript", "python": "Python",
+    "typescript": "TypeScript", "python": "Python", "ruby": "Ruby",
 }
 
 
@@ -126,7 +126,7 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
     --border: rgba(11,11,11,0.10);
     --cat-1: #2a78d6; --cat-2: #eb6834; --cat-3: #1baf7a; --cat-4: #eda100;
     --cat-5: #e87ba4; --cat-6: #008300; --cat-7: #6250d6; --cat-8: #e34948;
-    --cat-9: #84b000; --cat-10: #0092c4; --cat-11: #8c5a2b;
+    --cat-9: #84b000; --cat-10: #0092c4; --cat-11: #8c5a2b; --cat-12: #b5174e;
   }
   @media (prefers-color-scheme: dark) {
     :root:where(:not([data-theme="light"])) .viz-root {
@@ -137,7 +137,7 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
       --border: rgba(255,255,255,0.10);
       --cat-1: #3987e5; --cat-2: #d95926; --cat-3: #199e70; --cat-4: #c98500;
       --cat-5: #d55181; --cat-6: #008300; --cat-7: #9085e9; --cat-8: #e66767;
-      --cat-9: #a3c636; --cat-10: #35b5e0; --cat-11: #b07845;
+      --cat-9: #a3c636; --cat-10: #35b5e0; --cat-11: #b07845; --cat-12: #d6447c;
     }
   }
   :root[data-theme="dark"] .viz-root {
@@ -148,7 +148,7 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
     --border: rgba(255,255,255,0.10);
     --cat-1: #3987e5; --cat-2: #d95926; --cat-3: #199e70; --cat-4: #c98500;
     --cat-5: #d55181; --cat-6: #008300; --cat-7: #9085e9; --cat-8: #e66767;
-    --cat-9: #a3c636; --cat-10: #35b5e0; --cat-11: #b07845;
+    --cat-9: #a3c636; --cat-10: #35b5e0; --cat-11: #b07845; --cat-12: #d6447c;
   }
   * { box-sizing: border-box; }
   body.viz-root {
@@ -312,6 +312,7 @@ const DATA = __DATA__;
     javascript: { slot: 4,  shape: "tridown"  }, // yellow (vs php magenta)
     typescript: { slot: 9,  shape: "star"     }, // lime   (vs csharp brown)
     python:     { slot: 7,  shape: "plus"     }, // purple (vs java green)
+    ruby:       { slot: 12, shape: "triangle" }, // crimson (vs swift aqua)
   };
   const styleFor = lang => {
     const s = STYLE[lang] || { slot: 1, shape: "circle" };

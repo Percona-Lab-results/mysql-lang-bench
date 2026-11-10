@@ -13,7 +13,7 @@
     --border: rgba(11,11,11,0.10);
     --cat-1: #2a78d6; --cat-2: #eb6834; --cat-3: #1baf7a; --cat-4: #eda100;
     --cat-5: #e87ba4; --cat-6: #008300; --cat-7: #6250d6; --cat-8: #e34948;
-    --cat-9: #84b000; --cat-10: #0092c4; --cat-11: #8c5a2b;
+    --cat-9: #84b000; --cat-10: #0092c4; --cat-11: #8c5a2b; --cat-12: #b5174e;
   }
   @media (prefers-color-scheme: dark) {
     :root:where(:not([data-theme="light"])) .viz-root {
@@ -24,7 +24,7 @@
       --border: rgba(255,255,255,0.10);
       --cat-1: #3987e5; --cat-2: #d95926; --cat-3: #199e70; --cat-4: #c98500;
       --cat-5: #d55181; --cat-6: #008300; --cat-7: #9085e9; --cat-8: #e66767;
-      --cat-9: #a3c636; --cat-10: #35b5e0; --cat-11: #b07845;
+      --cat-9: #a3c636; --cat-10: #35b5e0; --cat-11: #b07845; --cat-12: #d6447c;
     }
   }
   :root[data-theme="dark"] .viz-root {
@@ -35,7 +35,7 @@
     --border: rgba(255,255,255,0.10);
     --cat-1: #3987e5; --cat-2: #d95926; --cat-3: #199e70; --cat-4: #c98500;
     --cat-5: #d55181; --cat-6: #008300; --cat-7: #9085e9; --cat-8: #e66767;
-    --cat-9: #a3c636; --cat-10: #35b5e0; --cat-11: #b07845;
+    --cat-9: #a3c636; --cat-10: #35b5e0; --cat-11: #b07845; --cat-12: #d6447c;
   }
   * { box-sizing: border-box; }
   body.viz-root {
@@ -128,6 +128,7 @@
 <tr><th scope="row">JavaScript</th><td class="num">1,135</td><td class="num">2,186</td><td class="num">4,011</td><td class="num">6,212</td><td class="num">7,842</td><td class="num">7,879</td><td class="num">6,285</td><td class="num">5,093</td></tr>
 <tr><th scope="row">TypeScript</th><td class="num">1,109</td><td class="num">2,060</td><td class="num">4,057</td><td class="num">6,191</td><td class="num">7,741</td><td class="num">7,737</td><td class="num">6,518</td><td class="num">5,135</td></tr>
 <tr><th scope="row">Python</th><td class="num">1,198</td><td class="num">1,129</td><td class="num">1,095</td><td class="num">1,021</td><td class="num">948</td><td class="num">905</td><td class="num">871</td><td class="num">834</td></tr>
+<tr><th scope="row">Ruby</th><td class="num">802</td><td class="num">999</td><td class="num">964</td><td class="num">926</td><td class="num">864</td><td class="num">782</td><td class="num">720</td><td class="num">692</td></tr>
 </tbody></table></div></details>
   </section>
 
@@ -151,6 +152,7 @@
 <tr><th scope="row">JavaScript</th><td class="num">2,840</td><td class="num">2,896</td><td class="num">3,055</td><td class="num">3,960</td><td class="num">6,115</td><td class="num">7,151</td><td class="num">9,639</td><td class="num">12,416</td></tr>
 <tr><th scope="row">TypeScript</th><td class="num">2,819</td><td class="num">2,967</td><td class="num">3,054</td><td class="num">4,001</td><td class="num">6,273</td><td class="num">7,356</td><td class="num">9,150</td><td class="num">12,254</td></tr>
 <tr><th scope="row">Python</th><td class="num">1,254</td><td class="num">1,589</td><td class="num">1,641</td><td class="num">1,758</td><td class="num">1,901</td><td class="num">1,992</td><td class="num">2,075</td><td class="num">2,569</td></tr>
+<tr><th scope="row">Ruby</th><td class="num">2,174</td><td class="num">2,196</td><td class="num">2,323</td><td class="num">2,766</td><td class="num">3,490</td><td class="num">4,222</td><td class="num">4,321</td><td class="num">4,664</td></tr>
 </tbody></table></div></details>
     <details class="tables"><summary>Table view — server CPU &micro;s per transaction</summary>
       <div class="tablewrap"><table><thead><tr><th>Language</th><th class="num">4</th><th class="num">8</th><th class="num">16</th><th class="num">32</th><th class="num">64</th><th class="num">128</th><th class="num">256</th><th class="num">512</th></tr></thead><tbody><tr><th scope="row">C</th><td class="num">1,582</td><td class="num">1,567</td><td class="num">1,603</td><td class="num">1,801</td><td class="num">2,281</td><td class="num">2,110</td><td class="num">2,227</td><td class="num">2,424</td></tr>
@@ -164,6 +166,7 @@
 <tr><th scope="row">JavaScript</th><td class="num">1,615</td><td class="num">1,614</td><td class="num">1,671</td><td class="num">2,108</td><td class="num">2,811</td><td class="num">2,984</td><td class="num">3,355</td><td class="num">3,575</td></tr>
 <tr><th scope="row">TypeScript</th><td class="num">1,628</td><td class="num">1,649</td><td class="num">1,676</td><td class="num">2,123</td><td class="num">2,800</td><td class="num">2,984</td><td class="num">3,339</td><td class="num">3,626</td></tr>
 <tr><th scope="row">Python</th><td class="num">1,862</td><td class="num">1,886</td><td class="num">2,001</td><td class="num">2,136</td><td class="num">2,293</td><td class="num">2,399</td><td class="num">2,496</td><td class="num">2,661</td></tr>
+<tr><th scope="row">Ruby</th><td class="num">1,906</td><td class="num">1,872</td><td class="num">1,969</td><td class="num">2,122</td><td class="num">2,292</td><td class="num">2,452</td><td class="num">2,569</td><td class="num">2,647</td></tr>
 </tbody></table></div></details>
   </section>
 
@@ -204,7 +207,7 @@
 <div id="tooltip" role="status"></div>
 
 <script>
-const DATA = {"threads":[4,8,16,32,64,128,256,512],"series":[{"lang":"c","name":"C","driver":"libmysqlclient 8.0.46","tps":[2302.7,4650.7,8740.4,15650.2,23701.9,29792.5,29105.9,27052.7],"cli":[323,319,323,392,518,483,499,544],"srv":[1582,1567,1603,1801,2281,2110,2227,2424],"peak":29792.5},{"lang":"cpp","name":"C++","driver":"libmysqlclient 8.0.46","tps":[2370.5,4786.1,8891.8,15737.3,23976.0,27626.2,29437.0,28254.9],"cli":[292,309,327,386,513,494,493,525],"srv":[1575,1527,1588,1780,2260,2182,2217,2322],"peak":29437.0},{"lang":"swift","name":"Swift","driver":"libmysqlclient 8.0.46","tps":[2392.9,4589.7,8947.6,15642.2,23532.8,29334.8,28139.3,26107.5],"cli":[300,310,336,390,519,483,505,550],"srv":[1565,1558,1601,1803,2300,2162,2310,2526],"peak":29334.8},{"lang":"rust","name":"Rust","driver":"mysql crate 25.0.1","tps":[2268.2,4464.0,8231.8,14272.4,22125.8,27044.6,27353.6,25497.8],"cli":[378,398,433,497,671,641,680,737],"srv":[1569,1561,1612,1839,2326,2145,2209,2403],"peak":27353.6},{"lang":"php","name":"PHP","driver":"mysqli mysqlnd 8.3.6","tps":[2242.8,4347.1,8195.9,14670.5,21391.7,27029.0,26050.2,23481.4],"cli":[439,417,484,546,789,735,788,908],"srv":[1552,1551,1614,1802,2329,2140,2271,2508],"peak":27029.0},{"lang":"java","name":"Java","driver":"Connector/J mysql-connector-j-8.4.0 (Revision: 1c3f5c149e0bfe31c7fbeb24e2d260cd890972c4)","tps":[1963.5,3785.2,7396.4,12849.7,18855.0,23230.8,22464.4,20170.1],"cli":[1622,1298,1120,1137,1376,1300,1198,1364],"srv":[1545,1571,1618,1877,2467,2342,2520,2782],"peak":23230.8},{"lang":"csharp","name":"C#","driver":"MySqlConnector 2.4.0","tps":[1906.4,3605.8,6801.3,11034.9,12794.0,10900.2,6826.8,3727.2],"cli":[858,825,817,895,1134,1071,1114,1381],"srv":[1570,1571,1654,1835,2418,2295,2429,2594],"peak":12794.0},{"lang":"go","name":"Go","driver":"go-sql-driver/mysql 1.9.3","tps":[2090.1,3924.1,6841.3,5090.1,4824.1,5443.4,9428.7,9813.4],"cli":[604,652,823,2930,4042,4641,4241,3986],"srv":[1529,1564,1730,2299,2442,2561,2600,2549],"peak":9813.4},{"lang":"javascript","name":"JavaScript","driver":"mysql2 3.24.6","tps":[1135.2,2186.3,4010.9,6212.5,7842.1,7879.2,6284.8,5092.7],"cli":[2840,2896,3055,3960,6115,7151,9639,12416],"srv":[1615,1614,1671,2108,2811,2984,3355,3575],"peak":7879.2},{"lang":"typescript","name":"TypeScript","driver":"mysql2 3.24.6","tps":[1108.7,2059.9,4057.0,6191.2,7741.1,7736.6,6518.1,5135.4],"cli":[2819,2967,3054,4001,6273,7356,9150,12254],"srv":[1628,1649,1676,2123,2800,2984,3339,3626],"peak":7741.1},{"lang":"python","name":"Python","driver":"mysqlclient 2.3.0 (libmysqlclient 8.4.9)","tps":[1198.3,1128.8,1094.9,1020.7,947.8,905.0,870.7,833.5],"cli":[1254,1589,1641,1758,1901,1992,2075,2569],"srv":[1862,1886,2001,2136,2293,2399,2496,2661],"peak":1198.3}],"srvLo":[1529,1527,1588,1780,2260,2110,2209,2322],"srvHi":[1862,1886,2001,2299,2811,2984,3355,3626]};
+const DATA = {"threads":[4,8,16,32,64,128,256,512],"series":[{"lang":"c","name":"C","driver":"libmysqlclient 8.0.46","tps":[2302.7,4650.7,8740.4,15650.2,23701.9,29792.5,29105.9,27052.7],"cli":[323,319,323,392,518,483,499,544],"srv":[1582,1567,1603,1801,2281,2110,2227,2424],"peak":29792.5},{"lang":"cpp","name":"C++","driver":"libmysqlclient 8.0.46","tps":[2370.5,4786.1,8891.8,15737.3,23976.0,27626.2,29437.0,28254.9],"cli":[292,309,327,386,513,494,493,525],"srv":[1575,1527,1588,1780,2260,2182,2217,2322],"peak":29437.0},{"lang":"swift","name":"Swift","driver":"libmysqlclient 8.0.46","tps":[2392.9,4589.7,8947.6,15642.2,23532.8,29334.8,28139.3,26107.5],"cli":[300,310,336,390,519,483,505,550],"srv":[1565,1558,1601,1803,2300,2162,2310,2526],"peak":29334.8},{"lang":"rust","name":"Rust","driver":"mysql crate 25.0.1","tps":[2268.2,4464.0,8231.8,14272.4,22125.8,27044.6,27353.6,25497.8],"cli":[378,398,433,497,671,641,680,737],"srv":[1569,1561,1612,1839,2326,2145,2209,2403],"peak":27353.6},{"lang":"php","name":"PHP","driver":"mysqli mysqlnd 8.3.6","tps":[2242.8,4347.1,8195.9,14670.5,21391.7,27029.0,26050.2,23481.4],"cli":[439,417,484,546,789,735,788,908],"srv":[1552,1551,1614,1802,2329,2140,2271,2508],"peak":27029.0},{"lang":"java","name":"Java","driver":"Connector/J mysql-connector-j-8.4.0 (Revision: 1c3f5c149e0bfe31c7fbeb24e2d260cd890972c4)","tps":[1963.5,3785.2,7396.4,12849.7,18855.0,23230.8,22464.4,20170.1],"cli":[1622,1298,1120,1137,1376,1300,1198,1364],"srv":[1545,1571,1618,1877,2467,2342,2520,2782],"peak":23230.8},{"lang":"csharp","name":"C#","driver":"MySqlConnector 2.4.0","tps":[1906.4,3605.8,6801.3,11034.9,12794.0,10900.2,6826.8,3727.2],"cli":[858,825,817,895,1134,1071,1114,1381],"srv":[1570,1571,1654,1835,2418,2295,2429,2594],"peak":12794.0},{"lang":"go","name":"Go","driver":"go-sql-driver/mysql 1.9.3","tps":[2090.1,3924.1,6841.3,5090.1,4824.1,5443.4,9428.7,9813.4],"cli":[604,652,823,2930,4042,4641,4241,3986],"srv":[1529,1564,1730,2299,2442,2561,2600,2549],"peak":9813.4},{"lang":"javascript","name":"JavaScript","driver":"mysql2 3.24.6","tps":[1135.2,2186.3,4010.9,6212.5,7842.1,7879.2,6284.8,5092.7],"cli":[2840,2896,3055,3960,6115,7151,9639,12416],"srv":[1615,1614,1671,2108,2811,2984,3355,3575],"peak":7879.2},{"lang":"typescript","name":"TypeScript","driver":"mysql2 3.24.6","tps":[1108.7,2059.9,4057.0,6191.2,7741.1,7736.6,6518.1,5135.4],"cli":[2819,2967,3054,4001,6273,7356,9150,12254],"srv":[1628,1649,1676,2123,2800,2984,3339,3626],"peak":7741.1},{"lang":"python","name":"Python","driver":"mysqlclient 2.3.0 (libmysqlclient 8.4.9)","tps":[1198.3,1128.8,1094.9,1020.7,947.8,905.0,870.7,833.5],"cli":[1254,1589,1641,1758,1901,1992,2075,2569],"srv":[1862,1886,2001,2136,2293,2399,2496,2661],"peak":1198.3},{"lang":"ruby","name":"Ruby","driver":"mysql2 0.5.7 (libmysqlclient 8.0.46)","tps":[801.5,999.4,963.6,926.1,864.2,782.5,719.8,692.0],"cli":[2174,2196,2323,2766,3490,4222,4321,4664],"srv":[1906,1872,1969,2122,2292,2452,2569,2647],"peak":999.4}],"srvLo":[1529,1527,1588,1780,2260,2110,2209,2322],"srvHi":[1906,1886,2001,2299,2811,2984,3355,3626]};
 (function () {
   "use strict";
   const T = DATA.threads, N = T.length;
@@ -235,6 +238,7 @@ const DATA = {"threads":[4,8,16,32,64,128,256,512],"series":[{"lang":"c","name":
     javascript: { slot: 4,  shape: "tridown"  }, // yellow (vs php magenta)
     typescript: { slot: 9,  shape: "star"     }, // lime   (vs csharp brown)
     python:     { slot: 7,  shape: "plus"     }, // purple (vs java green)
+    ruby:       { slot: 12, shape: "triangle" }, // crimson (vs swift aqua)
   };
   const styleFor = lang => {
     const s = STYLE[lang] || { slot: 1, shape: "circle" };
