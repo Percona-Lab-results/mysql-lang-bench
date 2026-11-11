@@ -80,6 +80,16 @@ func envInt(_ name: String) -> Int {
     return n
 }
 
+func envIntDefault(_ name: String, _ def: Int) -> Int {
+    guard let v = ProcessInfo.processInfo.environment[name] else {
+        return def
+    }
+    guard let n = Int(v) else {
+        fail("environment variable \(name) is not an integer: '\(v)'")
+    }
+    return n
+}
+
 /* ---------------- timing -------------------------------------------------- */
 
 func nowNs() -> Int64 {
@@ -112,6 +122,7 @@ var warmupTxns = 0
 var txnsPerThread = 0
 var rangeSize = 0
 var baseSeed = 0
+var durationS = 0 /* 0 → events mode, > 0 → duration mode (BENCH_DURATION_S) */
 
 /* Constant string parameters, read-only after init — safe to share across
    workers (as in the C implementation). Heap-allocated so the MYSQL_BIND
@@ -188,9 +199,15 @@ final class Worker {
     let bpDel: UnsafeMutablePointer<MYSQL_BIND>         /* [1] */
     let bpIns: UnsafeMutablePointer<MYSQL_BIND>         /* [4] */
 
-    let lat: UnsafeMutablePointer<Int64> /* [txnsPerThread], pre-allocated */
+    /* Per-worker latency storage, owned exclusively by this worker's thread
+       during the run and read by main() only after the worker is done.
+       Events mode: pre-allocated to txnsPerThread and never grown.
+       Duration mode: grown realloc-style (double, copy, free old) by record(). */
+    var lat: UnsafeMutablePointer<Int64>
+    var latCap: Int
+    var latCount: Int = 0
 
-    init(index: Int, seed: Int, txns: Int) {
+    init(index: Int, seed: Int, latCapacity: Int) {
         self.index = index
         self.prngState = Int64(seed)
 
@@ -235,8 +252,26 @@ final class Worker {
         bpDel = allocBind(1)
         bpIns = allocBind(4)
 
-        lat = UnsafeMutablePointer<Int64>.allocate(capacity: txns)
-        lat.initialize(repeating: 0, count: txns)
+        latCap = latCapacity
+        lat = UnsafeMutablePointer<Int64>.allocate(capacity: latCapacity)
+        lat.initialize(repeating: 0, count: latCapacity)
+    }
+
+    /* Append one timed-transaction latency (integer microseconds), growing the
+       buffer when full. Only this worker's thread calls it. */
+    @inline(__always)
+    func record(_ us: Int64) {
+        if latCount == latCap {
+            let newCap = latCap * 2
+            let p = UnsafeMutablePointer<Int64>.allocate(capacity: newCap)
+            p.initialize(from: lat, count: latCount)
+            (p + latCount).initialize(repeating: 0, count: newCap - latCount)
+            lat.deallocate()
+            lat = p
+            latCap = newCap
+        }
+        lat[latCount] = us
+        latCount += 1
     }
 
     /* Called from main() after the worker thread has finished (it closed the
@@ -555,10 +590,22 @@ func workerMain(_ w: Worker) {
 
     /* Timed loop: per-transaction latency in integer microseconds, from just
        before the first BEGIN attempt to after the successful COMMIT. */
-    for i in 0..<txnsPerThread {
-        let t0 = nowNs()
-        runTxn(w)
-        w.lat[i] = (nowNs() - t0) / 1000
+    if durationS > 0 {
+        /* Duration mode: deadline checked before each new transaction; a
+           transaction in flight at the deadline (its retries included)
+           completes. BENCH_TXNS_PER_THREAD is ignored. */
+        let deadlineNs = nowNs() + Int64(durationS) * 1_000_000_000
+        while nowNs() < deadlineNs {
+            let t0 = nowNs()
+            runTxn(w)
+            w.record((nowNs() - t0) / 1000)
+        }
+    } else {
+        for _ in 0..<txnsPerThread {
+            let t0 = nowNs()
+            runTxn(w)
+            w.record((nowNs() - t0) / 1000)
+        }
     }
 
     for j in 0..<ST_COUNT {
@@ -586,9 +633,10 @@ func main() {
     txnsPerThread = envInt("BENCH_TXNS_PER_THREAD")
     rangeSize = envInt("BENCH_RANGE_SIZE")
     baseSeed = envInt("BENCH_SEED")
+    durationS = envIntDefault("BENCH_DURATION_S", 0) /* 0 → events, > 0 → duration */
 
     if nThreads <= 0 || txnsPerThread <= 0 || tableRows <= 0 ||
-        rangeSize <= 0 || warmupTxns < 0 {
+        rangeSize <= 0 || warmupTxns < 0 || durationS < 0 {
         fail("invalid workload configuration")
     }
 
@@ -608,8 +656,11 @@ func main() {
     padValLen = UnsafeMutablePointer<UInt>.allocate(capacity: 1)
     padValLen.initialize(to: UInt(padVal.utf8.count)) /* 60 */
 
+    /* Events mode pre-allocates exactly txnsPerThread latency slots per worker;
+       duration mode starts at 4096 and grows as needed. */
     let workers = (0..<nThreads).map {
-        Worker(index: $0, seed: baseSeed + $0, txns: txnsPerThread)
+        Worker(index: $0, seed: baseSeed + $0,
+               latCapacity: durationS > 0 ? 4096 : txnsPerThread)
     }
 
     startBarrier = UnsafeMutablePointer<pthread_barrier_t>.allocate(capacity: 1)
@@ -637,13 +688,18 @@ func main() {
 
     let driverVersion = String(cString: mysql_get_client_info())
 
-    /* Merge latency arrays, sort, percentiles. */
-    let txns = nThreads * txnsPerThread
+    /* Merge latency arrays, sort, percentiles. txns: events mode =
+       nThreads * txnsPerThread; duration mode = actual committed timed
+       transactions across workers. */
+    var txns = 0
+    for w in workers {
+        txns += w.latCount
+    }
     var lat = [Int64](repeating: 0, count: txns)
     var retries: Int64 = 0
     var idx = 0
     for w in workers {
-        for i in 0..<txnsPerThread {
+        for i in 0..<w.latCount {
             lat[idx] = w.lat[i]
             idx += 1
         }

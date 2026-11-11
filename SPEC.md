@@ -112,6 +112,26 @@ timeouts (1205) and duplicate keys on the insert (1062) are expected. On any of 
 all values (PRNG stream continues) and re-run the whole transaction until it commits.
 Any other error: print to stderr, exit non-zero.
 
+## Fixed-duration mode
+
+`BENCH_DURATION_S` (integer, default 0 — parse it as optional):
+
+- `0` → **events mode** (the behaviour above): each worker runs exactly
+  `BENCH_TXNS_PER_THREAD` timed transactions.
+- `> 0` → **duration mode**: after the barrier each worker samples its own
+  monotonic clock and runs transactions until `start + BENCH_DURATION_S`,
+  checking the deadline **before starting each new transaction** — a
+  transaction in flight at the deadline runs to successful commit (its
+  retries included). `BENCH_TXNS_PER_THREAD` is ignored; latency storage
+  must grow dynamically. `txns` in the output = total committed timed
+  transactions across workers; `tps = txns / elapsed_s` as before. The
+  per-worker warm-up (`BENCH_WARMUP_TXNS`) is unchanged — it still runs
+  before the barrier in both modes.
+
+The harness additionally runs a single long read-only sysbench warm-up after
+the data load and before rung 1 of a sweep (buffer-pool initialization); that
+is outside the implementations' scope.
+
 ## Timing and statistics
 
 - Monotonic clocks only.

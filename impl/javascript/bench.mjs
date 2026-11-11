@@ -132,12 +132,31 @@ async function workerRun() {
   parentPort.postMessage({ type: "ready" });
   await started;
 
-  // Pre-allocated latency array (integer microseconds, truncated).
-  const latencies = new Float64Array(d.txnsPerThread);
-  for (let j = 0; j < d.txnsPerThread; j++) {
-    const t0 = process.hrtime.bigint();
-    await txn();
-    latencies[j] = Number((process.hrtime.bigint() - t0) / 1000n);
+  let latencies;
+  if (d.durationS > 0) {
+    // Duration mode: transaction count unknown up front — collect latencies
+    // in a growable plain array, then convert to a Float64Array so the
+    // zero-copy transfer back to main works the same as in events mode.
+    // Deadline is checked before each new transaction; a transaction in
+    // flight at the deadline runs to successful commit (retries included).
+    const collected = [];
+    const start = process.hrtime.bigint();
+    const deadline = start + BigInt(d.durationS) * 1000000000n;
+    while (process.hrtime.bigint() < deadline) {
+      const t0 = process.hrtime.bigint();
+      await txn();
+      collected.push(Number((process.hrtime.bigint() - t0) / 1000n));
+    }
+    latencies = Float64Array.from(collected);
+  } else {
+    // Events mode: pre-allocated latency array (integer microseconds,
+    // truncated), exactly BENCH_TXNS_PER_THREAD timed transactions.
+    latencies = new Float64Array(d.txnsPerThread);
+    for (let j = 0; j < d.txnsPerThread; j++) {
+      const t0 = process.hrtime.bigint();
+      await txn();
+      latencies[j] = Number((process.hrtime.bigint() - t0) / 1000n);
+    }
   }
 
   parentPort.postMessage({ type: "done", latencies, retries }, [
@@ -167,6 +186,11 @@ function getenvInt(name) {
   return parseInt(v.trim(), 10);
 }
 
+function getenvIntOpt(name, def) {
+  if (process.env[name] === undefined) return def;
+  return getenvInt(name);
+}
+
 async function main() {
   const cfg = {
     host: getenvStr("MYSQL_HOST"),
@@ -179,6 +203,7 @@ async function main() {
     warmupTxns: getenvInt("BENCH_WARMUP_TXNS"),
     txnsPerThread: getenvInt("BENCH_TXNS_PER_THREAD"),
     seed: getenvInt("BENCH_SEED"),
+    durationS: getenvIntOpt("BENCH_DURATION_S", 0), // 0 = events mode
   };
   const threads = getenvInt("BENCH_THREADS");
   if (threads < 1 || cfg.txnsPerThread < 1) {
@@ -264,7 +289,11 @@ async function main() {
   }
 
   const elapsedS = Number(tEnd - tStart) / 1e9;
-  const txns = threads * cfg.txnsPerThread;
+  // txns = total committed timed transactions actually run. In events mode
+  // this equals threads * txnsPerThread; in duration mode each worker ran a
+  // variable count, reflected by its latency array length.
+  let txns = 0;
+  for (const r of results) txns += r.latencies.length;
   const tps = txns / elapsedS;
 
   const merged = new Float64Array(txns);

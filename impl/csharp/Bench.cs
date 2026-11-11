@@ -3,6 +3,7 @@
 // server-side prepared statements, explicit plain BEGIN/COMMIT/ROLLBACK.
 
 using System;
+using System.Collections.Generic;
 using System.Diagnostics;
 using System.Globalization;
 using System.Net;
@@ -22,6 +23,7 @@ internal static class Bench
     private static int _threads;
     private static int _warmupTxns;
     private static int _txnsPerThread;
+    private static int _durationS; // 0 = events mode, > 0 = fixed-duration mode
     private static int _rangeSize;
     private static int _seed;
     private static string _cVal = "";
@@ -47,6 +49,15 @@ internal static class Bench
             Console.Error.WriteLine("missing required environment variable: " + name);
             Environment.Exit(1);
         }
+        return int.Parse(v, NumberStyles.Integer, CultureInfo.InvariantCulture);
+    }
+
+    private static int EnvIntOpt(string name, int def)
+    {
+        string? v = Environment.GetEnvironmentVariable(name);
+        if (v is null) return def;
+        v = v.Trim();
+        if (v.Length == 0) return def;
         return int.Parse(v, NumberStyles.Integer, CultureInfo.InvariantCulture);
     }
 
@@ -90,7 +101,9 @@ internal static class Bench
     private sealed class Worker
     {
         private readonly int _idx;
-        public readonly long[] Latencies; // pre-allocated, one slot per timed txn
+        // Events mode: pre-sized to BENCH_TXNS_PER_THREAD. Duration mode: grows
+        // dynamically (initial capacity a few thousand); one entry per timed txn.
+        public readonly List<long> Latencies;
         public long Retries;              // retryable-error count (timed window only)
         public readonly Thread Thread;
 
@@ -129,7 +142,7 @@ internal static class Bench
         public Worker(int idx)
         {
             _idx = idx;
-            Latencies = new long[_txnsPerThread];
+            Latencies = new List<long>(_durationS > 0 ? 4096 : _txnsPerThread);
             _lcgState = (long)_seed + idx;
             Thread = new Thread(Run) { Name = "bench-worker-" + idx, IsBackground = false };
         }
@@ -205,12 +218,31 @@ internal static class Bench
                 _startBarrier.SignalAndWait(); // released together with main's t_start sample
 
                 long freq = Stopwatch.Frequency;
-                for (int i = 0; i < _txnsPerThread; i++)
+                if (_durationS > 0)
                 {
-                    long t0 = Stopwatch.GetTimestamp();
-                    RunTxnWithRetries(timed: true);
-                    long t1 = Stopwatch.GetTimestamp();
-                    Latencies[i] = (t1 - t0) * 1_000_000L / freq; // integer microseconds, truncated; retries included
+                    // Duration mode: deadline checked before each new transaction;
+                    // a transaction in flight at the deadline runs to successful
+                    // commit (its retries included).
+                    long start = Stopwatch.GetTimestamp();
+                    long deadlineTicks = (long)_durationS * freq;
+                    while (Stopwatch.GetTimestamp() - start < deadlineTicks)
+                    {
+                        long t0 = Stopwatch.GetTimestamp();
+                        RunTxnWithRetries(timed: true);
+                        long t1 = Stopwatch.GetTimestamp();
+                        Latencies.Add((t1 - t0) * 1_000_000L / freq); // integer microseconds, truncated; retries included
+                    }
+                }
+                else
+                {
+                    // Events mode: exactly BENCH_TXNS_PER_THREAD timed transactions.
+                    for (int i = 0; i < _txnsPerThread; i++)
+                    {
+                        long t0 = Stopwatch.GetTimestamp();
+                        RunTxnWithRetries(timed: true);
+                        long t1 = Stopwatch.GetTimestamp();
+                        Latencies.Add((t1 - t0) * 1_000_000L / freq); // integer microseconds, truncated; retries included
+                    }
                 }
 
                 _conn.Close();
@@ -334,6 +366,7 @@ internal static class Bench
         _threads = EnvInt("BENCH_THREADS");
         _warmupTxns = EnvInt("BENCH_WARMUP_TXNS");
         _txnsPerThread = EnvInt("BENCH_TXNS_PER_THREAD");
+        _durationS = EnvIntOpt("BENCH_DURATION_S", 0); // 0 = events mode (default)
         _rangeSize = EnvInt("BENCH_RANGE_SIZE");
         _seed = EnvInt("BENCH_SEED");
 
@@ -371,15 +404,22 @@ internal static class Bench
         }
         long tEnd = Stopwatch.GetTimestamp();
 
-        long txns = (long)_threads * _txnsPerThread;
-        var all = new long[txns];
-        int pos = 0;
+        // txns = total committed timed transactions across workers. In events mode
+        // this equals BENCH_THREADS * BENCH_TXNS_PER_THREAD; in duration mode each
+        // worker contributes however many transactions it actually committed.
+        long txns = 0;
         long totalRetries = 0;
         for (int i = 0; i < _threads; i++)
         {
-            Array.Copy(workers[i].Latencies, 0, all, pos, _txnsPerThread);
-            pos += _txnsPerThread;
+            txns += workers[i].Latencies.Count;
             totalRetries += workers[i].Retries;
+        }
+        var all = new long[txns];
+        int pos = 0;
+        for (int i = 0; i < _threads; i++)
+        {
+            workers[i].Latencies.CopyTo(all, pos);
+            pos += workers[i].Latencies.Count;
         }
         Array.Sort(all);
 

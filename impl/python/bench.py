@@ -38,9 +38,11 @@ SQL_DELETE = "DELETE FROM sbtest WHERE id = %s"
 SQL_INSERT = "INSERT INTO sbtest (id, k, c, pad) VALUES (%s, %s, %s, %s)"
 
 
-def getenv_int(name):
+def getenv_int(name, default=None):
     val = os.environ.get(name)
     if val is None:
+        if default is not None:
+            return default
         print(f"missing required environment variable: {name}", file=sys.stderr)
         sys.exit(1)
     return int(val)
@@ -48,7 +50,7 @@ def getenv_int(name):
 
 class Worker(threading.Thread):
     def __init__(self, index, conn_args, table_rows, range_size,
-                 warmup_txns, txns, seed, barrier):
+                 warmup_txns, txns, duration_ns, seed, barrier):
         super().__init__(name=f"worker-{index}")
         self.index = index
         self.conn_args = conn_args
@@ -56,9 +58,13 @@ class Worker(threading.Thread):
         self.range_size = range_size
         self.warmup_txns = warmup_txns
         self.txns = txns
+        self.duration_ns = duration_ns
         self.seed = seed
         self.barrier = barrier
-        self.latencies = [0] * txns  # pre-allocated (integer microseconds)
+        if duration_ns > 0:
+            self.latencies = []  # duration mode: grows dynamically
+        else:
+            self.latencies = [0] * txns  # pre-allocated (integer microseconds)
         self.retries = 0
         self.error = None
 
@@ -138,10 +144,19 @@ class Worker(threading.Thread):
             self.retries = 0  # report retries from the timed window only
             self.barrier.wait()
 
-            for j in range(self.txns):
-                t0 = time.monotonic_ns()
-                txn()
-                self.latencies[j] = (time.monotonic_ns() - t0) // 1000
+            if self.duration_ns > 0:
+                # Duration mode: deadline checked before each new transaction;
+                # a transaction in flight (retries included) runs to commit.
+                deadline = time.monotonic_ns() + self.duration_ns
+                while time.monotonic_ns() < deadline:
+                    t0 = time.monotonic_ns()
+                    txn()
+                    self.latencies.append((time.monotonic_ns() - t0) // 1000)
+            else:
+                for j in range(self.txns):
+                    t0 = time.monotonic_ns()
+                    txn()
+                    self.latencies[j] = (time.monotonic_ns() - t0) // 1000
 
             cur.close()
         finally:
@@ -163,10 +178,12 @@ def main():
     txns_per_thread = getenv_int("BENCH_TXNS_PER_THREAD")
     range_size = getenv_int("BENCH_RANGE_SIZE")
     seed = getenv_int("BENCH_SEED")
+    duration_s = getenv_int("BENCH_DURATION_S", default=0)
+    duration_ns = duration_s * 1_000_000_000
 
     barrier = threading.Barrier(threads + 1)
     workers = [Worker(i, conn_args, table_rows, range_size,
-                      warmup_txns, txns_per_thread, seed, barrier)
+                      warmup_txns, txns_per_thread, duration_ns, seed, barrier)
                for i in range(threads)]
     for w in workers:
         w.start()
@@ -215,7 +232,10 @@ def main():
     except Exception:
         pass
 
-    txns = threads * txns_per_thread
+    if duration_s > 0:
+        txns = sum(len(w.latencies) for w in workers)
+    else:
+        txns = threads * txns_per_thread
     tps = txns / elapsed_s
     result = {
         "lang": "python",

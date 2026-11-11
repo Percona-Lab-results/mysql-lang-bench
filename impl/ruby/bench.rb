@@ -54,6 +54,18 @@ def env_int(name)
   end
 end
 
+def env_int_opt(name, default)
+  val = ENV[name]
+  return default if val.nil? || val.empty?
+
+  begin
+    Integer(val, 10)
+  rescue ArgumentError
+    warn "environment variable #{name} is not an integer: #{val.inspect}"
+    exit 1
+  end
+end
+
 def monotonic_ns
   Process.clock_gettime(Process::CLOCK_MONOTONIC, :nanosecond)
 end
@@ -62,17 +74,20 @@ class Worker
   attr_reader :index, :latencies, :retries
 
   def initialize(index, conn_opts, table_rows, range_size, warmup_txns, txns,
-                 seed, ready_queue, start_queue)
+                 duration_s, seed, ready_queue, start_queue)
     @index = index
     @conn_opts = conn_opts
     @table_rows = table_rows
     @range_size = range_size
     @warmup_txns = warmup_txns
     @txns = txns
+    @duration_ns = duration_s * 1_000_000_000
     @state = seed + index # own PRNG stream: 31-bit LCG, seeded BENCH_SEED + i
     @ready_queue = ready_queue
     @start_queue = start_queue
-    @latencies = Array.new(txns, 0) # pre-allocated (integer microseconds)
+    # Events mode: pre-allocated (integer microseconds). Duration mode: the
+    # transaction count is unknown up front, so the array grows dynamically.
+    @latencies = duration_s.positive? ? [] : Array.new(txns, 0)
     @retries = 0
   end
 
@@ -120,10 +135,22 @@ class Worker
       @ready_queue << :ready
       @start_queue.pop # blocks until main releases the start barrier
 
-      @txns.times do |j|
-        t0 = monotonic_ns
-        txn(client)
-        @latencies[j] = (monotonic_ns - t0) / 1000 # truncated integer us
+      if @duration_ns.positive?
+        # Duration mode: deadline checked before each new transaction; a
+        # transaction in flight at the deadline (retries included) completes.
+        start = monotonic_ns
+        deadline = start + @duration_ns
+        while monotonic_ns < deadline
+          t0 = monotonic_ns
+          txn(client)
+          @latencies << (monotonic_ns - t0) / 1000 # truncated integer us
+        end
+      else
+        @txns.times do |j|
+          t0 = monotonic_ns
+          txn(client)
+          @latencies[j] = (monotonic_ns - t0) / 1000 # truncated integer us
+        end
       end
     ensure
       client.close
@@ -194,6 +221,7 @@ def main
   txns_per_thread = env_int("BENCH_TXNS_PER_THREAD")
   range_size = env_int("BENCH_RANGE_SIZE")
   seed = env_int("BENCH_SEED")
+  duration_s = env_int_opt("BENCH_DURATION_S", 0) # 0 = events mode
 
   # Start barrier built from queues: each worker pushes to the shared ready
   # queue after connect + prepare + warmup, then blocks popping its own start
@@ -204,7 +232,7 @@ def main
 
   workers = (0...threads).map do |i|
     Worker.new(i, conn_opts, table_rows, range_size, warmup_txns,
-               txns_per_thread, seed, ready_queue, start_queues[i])
+               txns_per_thread, duration_s, seed, ready_queue, start_queues[i])
   end
   thread_objs = workers.map { |w| Thread.new { w.run } }
 
@@ -237,7 +265,9 @@ def main
     # client library info unavailable; report the gem version alone
   end
 
-  txns = threads * txns_per_thread
+  # Duration mode: total committed timed transactions across workers (one
+  # latency sample per committed transaction). Events mode: fixed count.
+  txns = duration_s.positive? ? n : threads * txns_per_thread
   tps = txns / elapsed_s
   result = {
     "lang" => "ruby",

@@ -59,6 +59,7 @@ interface BenchConfig {
   rangeSize: number;
   warmupTxns: number;
   txnsPerThread: number;
+  durationS: number;
   seed: number;
 }
 
@@ -195,12 +196,31 @@ async function workerRun(): Promise<void> {
   port.postMessage(readyMsg);
   await started;
 
-  // Pre-allocated latency array (integer microseconds, truncated).
-  const latencies = new Float64Array(d.txnsPerThread);
-  for (let j = 0; j < d.txnsPerThread; j++) {
-    const t0 = process.hrtime.bigint();
-    await txn();
-    latencies[j] = Number((process.hrtime.bigint() - t0) / 1000n);
+  // Latency storage (integer microseconds, truncated). Events mode uses a
+  // pre-allocated array; duration mode grows dynamically and is converted to
+  // a Float64Array for zero-copy transfer.
+  let latencies: Float64Array;
+  if (d.durationS > 0) {
+    // Duration mode: run until the deadline, checked before each new
+    // transaction; a transaction in flight at the deadline (retries
+    // included) runs to successful commit.
+    const timed: number[] = [];
+    const start = process.hrtime.bigint();
+    const deadline = start + BigInt(d.durationS) * 1000000000n;
+    while (process.hrtime.bigint() < deadline) {
+      const t0 = process.hrtime.bigint();
+      await txn();
+      timed.push(Number((process.hrtime.bigint() - t0) / 1000n));
+    }
+    latencies = Float64Array.from(timed);
+  } else {
+    // Events mode: exactly BENCH_TXNS_PER_THREAD timed transactions.
+    latencies = new Float64Array(d.txnsPerThread);
+    for (let j = 0; j < d.txnsPerThread; j++) {
+      const t0 = process.hrtime.bigint();
+      await txn();
+      latencies[j] = Number((process.hrtime.bigint() - t0) / 1000n);
+    }
   }
 
   const doneMsg: WorkerToMainMsg = { type: "done", latencies, retries };
@@ -229,6 +249,13 @@ function getenvInt(name: string): number {
   return parseInt(v.trim(), 10);
 }
 
+// Optional integer environment variable: defaults when unset, but a value
+// that is present must still be a valid integer.
+function getenvIntOpt(name: string, def: number): number {
+  if (process.env[name] === undefined) return def;
+  return getenvInt(name);
+}
+
 // Version of an installed package, read at runtime. The compiled benchmark
 // runs from dist/, so node_modules lives one level up from import.meta.url.
 function readPkgVersion(relPath: string): string {
@@ -254,11 +281,16 @@ async function main(): Promise<void> {
     rangeSize: getenvInt("BENCH_RANGE_SIZE"),
     warmupTxns: getenvInt("BENCH_WARMUP_TXNS"),
     txnsPerThread: getenvInt("BENCH_TXNS_PER_THREAD"),
+    durationS: getenvIntOpt("BENCH_DURATION_S", 0),
     seed: getenvInt("BENCH_SEED"),
   };
   const threads = getenvInt("BENCH_THREADS");
-  if (threads < 1 || cfg.txnsPerThread < 1) {
+  if (threads < 1 || (cfg.durationS === 0 && cfg.txnsPerThread < 1)) {
     console.error("BENCH_THREADS and BENCH_TXNS_PER_THREAD must be >= 1");
+    process.exit(1);
+  }
+  if (cfg.durationS < 0) {
+    console.error("BENCH_DURATION_S must be >= 0");
     process.exit(1);
   }
 
@@ -341,20 +373,29 @@ async function main(): Promise<void> {
   }
 
   const elapsedS = Number(tEnd - tStart) / 1e9;
-  const txns = threads * cfg.txnsPerThread;
-  const tps = txns / elapsedS;
 
-  const merged = new Float64Array(txns);
-  let off = 0;
+  // txns = total committed timed transactions across workers. In events mode
+  // every worker contributes exactly cfg.txnsPerThread; in duration mode the
+  // counts vary per worker, so merge by actual lengths.
+  const collected: WorkerResult[] = [];
+  let txns = 0;
   let totalRetries = 0;
   for (const r of results) {
     if (r === undefined) {
       console.error("internal error: missing worker result");
       process.exit(1);
     }
+    collected.push(r);
+    txns += r.latencies.length;
+    totalRetries += r.retries;
+  }
+  const tps = txns / elapsedS;
+
+  const merged = new Float64Array(txns);
+  let off = 0;
+  for (const r of collected) {
     merged.set(r.latencies, off);
     off += r.latencies.length;
-    totalRetries += r.retries;
   }
   merged.sort(); // TypedArray sort is numeric ascending
   const n = merged.length;

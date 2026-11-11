@@ -19,6 +19,7 @@ public class Bench {
     private static int threads;
     private static int warmupTxns;
     private static int txnsPerThread;
+    private static int durationS;
     private static int rangeSize;
     private static int seed;
     private static String cVal;
@@ -33,6 +34,12 @@ public class Bench {
             System.err.println("missing required environment variable: " + name);
             System.exit(1);
         }
+        return Integer.parseInt(v.trim());
+    }
+
+    private static int envIntOpt(String name, int def) {
+        String v = System.getenv(name);
+        if (v == null || v.isEmpty()) return def;
         return Integer.parseInt(v.trim());
     }
 
@@ -77,7 +84,8 @@ public class Bench {
     private static final class Worker extends Thread {
 
         private final int idx;
-        final long[] latencies;      // pre-allocated, one slot per timed txn
+        long[] latencies;            // events mode: exact; duration mode: grown by doubling
+        int count;                   // number of timed txns recorded in latencies
         long retries;                // retryable-error count (timed phase)
 
         // 31-bit LCG per SPEC.md, one independent stream per worker.
@@ -97,7 +105,7 @@ public class Bench {
         Worker(int idx) {
             super("bench-worker-" + idx);
             this.idx = idx;
-            this.latencies = new long[txnsPerThread];
+            this.latencies = new long[durationS > 0 ? 4096 : txnsPerThread];
             this.lcgState = (long) seed + idx;
         }
 
@@ -133,11 +141,24 @@ public class Bench {
 
                 startBarrier.await(); // released together with main's t_start sample
 
-                for (int i = 0; i < txnsPerThread; i++) {
-                    long t0 = System.nanoTime();
-                    runTxnWithRetries(true);
-                    long t1 = System.nanoTime();
-                    latencies[i] = (t1 - t0) / 1000L; // integer microseconds, retries included
+                if (durationS > 0) {
+                    long start = System.nanoTime();
+                    long deadline = start + durationS * 1_000_000_000L;
+                    // deadline checked before each new txn; an in-flight txn
+                    // (retries included) runs to successful commit
+                    while (System.nanoTime() < deadline) {
+                        long t0 = System.nanoTime();
+                        runTxnWithRetries(true);
+                        long t1 = System.nanoTime();
+                        record((t1 - t0) / 1000L); // integer microseconds, retries included
+                    }
+                } else {
+                    for (int i = 0; i < txnsPerThread; i++) {
+                        long t0 = System.nanoTime();
+                        runTxnWithRetries(true);
+                        long t1 = System.nanoTime();
+                        record((t1 - t0) / 1000L); // integer microseconds, retries included
+                    }
                 }
 
                 conn.close();
@@ -148,6 +169,13 @@ public class Bench {
                 System.err.println("worker " + idx + " error: " + e);
                 System.exit(1);
             }
+        }
+
+        private void record(long us) {
+            if (count == latencies.length) {
+                latencies = Arrays.copyOf(latencies, latencies.length * 2);
+            }
+            latencies[count++] = us;
         }
 
         // Runs one transaction, retrying on deadlock (1213), lock wait timeout (1205)
@@ -249,6 +277,7 @@ public class Bench {
         threads = envInt("BENCH_THREADS");
         warmupTxns = envInt("BENCH_WARMUP_TXNS");
         txnsPerThread = envInt("BENCH_TXNS_PER_THREAD");
+        durationS = envIntOpt("BENCH_DURATION_S", 0);
         rangeSize = envInt("BENCH_RANGE_SIZE");
         seed = envInt("BENCH_SEED");
 
@@ -282,13 +311,16 @@ public class Bench {
             return;
         }
 
-        long txns = (long) threads * (long) txnsPerThread;
+        long txns = 0;
+        for (int i = 0; i < threads; i++) {
+            txns += workers[i].count;
+        }
         long[] all = new long[(int) txns];
         int pos = 0;
         long totalRetries = 0;
         for (int i = 0; i < threads; i++) {
-            System.arraycopy(workers[i].latencies, 0, all, pos, txnsPerThread);
-            pos += txnsPerThread;
+            System.arraycopy(workers[i].latencies, 0, all, pos, workers[i].count);
+            pos += workers[i].count;
             totalRetries += workers[i].retries;
         }
         Arrays.sort(all);

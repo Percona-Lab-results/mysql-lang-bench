@@ -4,7 +4,7 @@
 // statements and its own PRNG stream. Timing is barrier-based.
 
 use std::sync::Barrier;
-use std::time::Instant;
+use std::time::{Duration, Instant};
 
 use mysql::prelude::Queryable;
 use mysql::{Conn, OptsBuilder, Row, Statement};
@@ -95,6 +95,7 @@ struct Cfg {
     threads: u64,
     warmup_txns: u64,
     txns_per_thread: u64,
+    duration_s: u64, // 0 = events mode, > 0 = duration mode
     range_size: u64,
     seed: u64,
     c_val: String,   // "abcdefghij" x 12 (120 chars)
@@ -272,12 +273,28 @@ fn worker_inner(
 
     // Timed phase. Latency window: just before the first BEGIN of the txn to
     // after its successful COMMIT, retries included. Integer microseconds.
-    let mut latencies = Vec::with_capacity(cfg.txns_per_thread as usize);
+    let mut latencies: Vec<u64>;
     let mut retries = 0u64;
-    for _ in 0..cfg.txns_per_thread {
-        let t0 = Instant::now();
-        run_txn(&mut conn, &st, &mut rng, cfg, &mut sink, &mut retries)?;
-        latencies.push(t0.elapsed().as_micros() as u64);
+    if cfg.duration_s > 0 {
+        // Duration mode: run until the per-worker deadline, checked before
+        // starting each new transaction; a transaction in flight at the
+        // deadline (its retries included) runs to successful commit.
+        latencies = Vec::with_capacity(4096);
+        let start = Instant::now();
+        let duration = Duration::from_secs(cfg.duration_s);
+        while start.elapsed() < duration {
+            let t0 = Instant::now();
+            run_txn(&mut conn, &st, &mut rng, cfg, &mut sink, &mut retries)?;
+            latencies.push(t0.elapsed().as_micros() as u64);
+        }
+    } else {
+        // Events mode: exactly BENCH_TXNS_PER_THREAD timed transactions.
+        latencies = Vec::with_capacity(cfg.txns_per_thread as usize);
+        for _ in 0..cfg.txns_per_thread {
+            let t0 = Instant::now();
+            run_txn(&mut conn, &st, &mut rng, cfg, &mut sink, &mut retries)?;
+            latencies.push(t0.elapsed().as_micros() as u64);
+        }
     }
 
     std::hint::black_box(sink);
@@ -317,18 +334,19 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
         threads: env_u64("BENCH_THREADS")?,
         warmup_txns: env_u64("BENCH_WARMUP_TXNS")?,
         txns_per_thread: env_u64("BENCH_TXNS_PER_THREAD")?,
+        duration_s: env_u64_or("BENCH_DURATION_S", 0)?,
         range_size: env_u64_or("BENCH_RANGE_SIZE", 100)?,
         seed: env_u64("BENCH_SEED")?,
         c_val: "abcdefghij".repeat(12),   // 120 chars
         pad_val: "0123456789".repeat(6), // 60 chars
     };
 
-    if cfg.table_rows == 0 || cfg.threads == 0 || cfg.txns_per_thread == 0 || cfg.range_size == 0 {
-        return Err(
-            "BENCH_TABLE_ROWS, BENCH_THREADS, BENCH_TXNS_PER_THREAD and BENCH_RANGE_SIZE \
-             must be > 0"
-                .into(),
-        );
+    if cfg.table_rows == 0 || cfg.threads == 0 || cfg.range_size == 0 {
+        return Err("BENCH_TABLE_ROWS, BENCH_THREADS and BENCH_RANGE_SIZE must be > 0".into());
+    }
+    // BENCH_TXNS_PER_THREAD is ignored in duration mode (BENCH_DURATION_S > 0).
+    if cfg.duration_s == 0 && cfg.txns_per_thread == 0 {
+        return Err("BENCH_TXNS_PER_THREAD must be > 0 in events mode".into());
     }
 
     // Start barrier: all workers (after connect + prepare + warmup) plus the
@@ -360,8 +378,8 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
         }
         let elapsed_s = t_start.elapsed().as_secs_f64();
 
-        let mut merged: Vec<u64> =
-            Vec::with_capacity((cfg.threads * cfg.txns_per_thread) as usize);
+        let total: usize = results.iter().map(|(lats, _)| lats.len()).sum();
+        let mut merged: Vec<u64> = Vec::with_capacity(total);
         let mut total_retries = 0u64;
         for (lats, retries) in results {
             merged.extend_from_slice(&lats);
@@ -379,7 +397,14 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
     let p99 = pct(99);
     let max_us = latencies[latencies.len() - 1];
 
-    let txns = cfg.threads * cfg.txns_per_thread;
+    // Duration mode: txns = total committed timed transactions across workers
+    // (one latency sample per committed timed transaction). Events mode:
+    // exactly BENCH_THREADS * BENCH_TXNS_PER_THREAD, as before.
+    let txns = if cfg.duration_s > 0 {
+        n
+    } else {
+        cfg.threads * cfg.txns_per_thread
+    };
     let tps = txns as f64 / elapsed_s;
     let qps = tps * 20.0; // 18 statements + BEGIN + COMMIT (sysbench counting)
 

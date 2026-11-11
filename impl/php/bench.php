@@ -28,6 +28,14 @@ function env_int(string $name): int {
     return (int) env_str($name);
 }
 
+function env_int_opt(string $name, int $default): int {
+    $v = getenv($name);
+    if ($v === false || $v === '') {
+        return $default;
+    }
+    return (int) $v;
+}
+
 // ---- PRNG: 31-bit LCG. One independent stream per worker process: the child
 // seeds this with BENCH_SEED + worker_index after the fork. ----
 $lcg_state = 0;
@@ -169,13 +177,29 @@ function worker_main(int $workerIdx, $sock, array $cfg): void {
 
     // Timed run: per-txn latency in integer microseconds (truncated), from
     // just before the first BEGIN to after the successful COMMIT, retries
-    // included. Latency array is pre-allocated.
-    $txns = $cfg['txnsPerThread'];
-    $latencies = array_fill(0, $txns, 0);
-    for ($t = 0; $t < $txns; $t++) {
-        $t0 = hrtime(true);
-        $runTxn();
-        $latencies[$t] = intdiv(hrtime(true) - $t0, 1000);
+    // included.
+    if ($cfg['durationS'] > 0) {
+        // Duration mode: run until start + BENCH_DURATION_S, checking the
+        // deadline BEFORE each new transaction (an in-flight transaction,
+        // retries included, completes). Latency storage grows dynamically.
+        $latencies = [];
+        $startNs = hrtime(true);
+        $deadlineNs = $startNs + $cfg['durationS'] * 1000000000;
+        while (hrtime(true) < $deadlineNs) {
+            $t0 = hrtime(true);
+            $runTxn();
+            $latencies[] = intdiv(hrtime(true) - $t0, 1000);
+        }
+    } else {
+        // Events mode: exactly BENCH_TXNS_PER_THREAD transactions, latency
+        // array pre-allocated.
+        $txns = $cfg['txnsPerThread'];
+        $latencies = array_fill(0, $txns, 0);
+        for ($t = 0; $t < $txns; $t++) {
+            $t0 = hrtime(true);
+            $runTxn();
+            $latencies[$t] = intdiv(hrtime(true) - $t0, 1000);
+        }
     }
 
     $conn->close();
@@ -208,6 +232,7 @@ try {
         'rangeSize' => env_int('BENCH_RANGE_SIZE'),
         'warmupTxns' => env_int('BENCH_WARMUP_TXNS'),
         'txnsPerThread' => env_int('BENCH_TXNS_PER_THREAD'),
+        'durationS' => env_int_opt('BENCH_DURATION_S', 0), // 0 = events mode, >0 = duration mode
         'seed' => env_int('BENCH_SEED'),
     ];
     $threads = env_int('BENCH_THREADS');
@@ -312,7 +337,12 @@ try {
             throw new RuntimeException("malformed result file for worker $i: $path");
         }
         $retries += (int) substr($last, 8);
-        if (count($lines) !== $cfg['txnsPerThread']) {
+        if ($cfg['durationS'] > 0) {
+            // Duration mode: per-worker counts vary; require at least one txn.
+            if (count($lines) < 1) {
+                throw new RuntimeException("worker $i reported no latencies: $path");
+            }
+        } elseif (count($lines) !== $cfg['txnsPerThread']) {
             throw new RuntimeException(
                 "worker $i reported " . count($lines) . ' latencies, expected ' . $cfg['txnsPerThread']
             );
@@ -329,7 +359,9 @@ try {
         return $latencies[(int) ceil($x / 100 * $n) - 1];
     };
 
-    $txns = $threads * $cfg['txnsPerThread'];
+    // Events mode: txns = threads * txns_per_thread (and $n equals that).
+    // Duration mode: txns = total committed timed transactions across workers.
+    $txns = $cfg['durationS'] > 0 ? $n : $threads * $cfg['txnsPerThread'];
     $elapsedS = ($tEndNs - $tStartNs) / 1e9;
     $tps = $txns / $elapsedS;
 

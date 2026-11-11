@@ -85,6 +85,7 @@ struct Config {
     int64_t threads = 0;
     int64_t warmup_txns = 0;
     int64_t txns_per_thread = 0;
+    int64_t duration_s = 0; // 0 = events mode, > 0 = fixed-duration mode
     int64_t range_size = 0;
     int64_t seed = 0;
 };
@@ -122,7 +123,7 @@ struct Worker {
 
     uint64_t lcg = 0;      // 31-bit LCG state, seeded with BENCH_SEED + index
     uint64_t retries = 0;  // timed-window retries (reset after warmup)
-    std::vector<uint64_t> lat; // pre-allocated in main (BENCH_TXNS_PER_THREAD)
+    std::vector<uint64_t> lat; // reserved in main, filled with push_back
 
     // Bound parameter values (stable addresses for MYSQL_BIND buffers).
     long long point_id[10] = {};
@@ -408,13 +409,24 @@ static void worker_main(Worker *wp) {
     pthread_barrier_wait(&g_start_barrier);
 
     using clock = std::chrono::steady_clock;
-    for (int64_t i = 0; i < g_cfg.txns_per_thread; i++) {
+    auto timed_txn = [&w]() {
         clock::time_point t0 = clock::now(); // just before the first BEGIN
         run_txn(w);                          // retry time included
-        w.lat[static_cast<size_t>(i)] = static_cast<uint64_t>(
+        w.lat.push_back(static_cast<uint64_t>(
             std::chrono::duration_cast<std::chrono::microseconds>(clock::now() -
                                                                   t0)
-                .count()); // integer microseconds, truncated
+                .count())); // integer microseconds, truncated
+    };
+    if (g_cfg.duration_s > 0) {
+        // Duration mode: deadline checked BEFORE each new transaction; a
+        // transaction in flight at the deadline (retries included) completes.
+        const clock::time_point deadline =
+            clock::now() + std::chrono::seconds(g_cfg.duration_s);
+        while (clock::now() < deadline)
+            timed_txn();
+    } else {
+        for (int64_t i = 0; i < g_cfg.txns_per_thread; i++) // events mode
+            timed_txn();
     }
 
     for (int j = 0; j < 18; j++)
@@ -447,15 +459,21 @@ int main() {
     g_cfg.table_rows = env_int("BENCH_TABLE_ROWS");
     g_cfg.threads = env_int("BENCH_THREADS");
     g_cfg.warmup_txns = env_int("BENCH_WARMUP_TXNS");
-    g_cfg.txns_per_thread = env_int("BENCH_TXNS_PER_THREAD");
+    g_cfg.duration_s = env_int_or("BENCH_DURATION_S", 0);
+    // Duration mode ignores BENCH_TXNS_PER_THREAD (it need not be set);
+    // events mode requires it, exactly as before.
+    g_cfg.txns_per_thread = g_cfg.duration_s > 0
+                                ? env_int_or("BENCH_TXNS_PER_THREAD", 0)
+                                : env_int("BENCH_TXNS_PER_THREAD");
     g_cfg.range_size = env_int_or("BENCH_RANGE_SIZE", 100);
     g_cfg.seed = env_int("BENCH_SEED");
 
     if (g_cfg.table_rows <= 0 || g_cfg.threads <= 0 ||
-        g_cfg.txns_per_thread <= 0 || g_cfg.warmup_txns < 0 ||
-        g_cfg.range_size <= 0)
+        (g_cfg.duration_s <= 0 && g_cfg.txns_per_thread <= 0) ||
+        g_cfg.warmup_txns < 0 || g_cfg.range_size <= 0 || g_cfg.duration_s < 0)
         die("BENCH_TABLE_ROWS/BENCH_THREADS/BENCH_TXNS_PER_THREAD/"
-            "BENCH_RANGE_SIZE must be > 0, BENCH_WARMUP_TXNS >= 0");
+            "BENCH_RANGE_SIZE must be > 0, BENCH_WARMUP_TXNS/BENCH_DURATION_S"
+            " >= 0");
 
     for (int i = 0; i < 12; i++)
         C_VAL += "abcdefghij"; // 120 chars
@@ -478,7 +496,11 @@ int main() {
         Worker &w = workers[static_cast<size_t>(i)];
         w.index = static_cast<int>(i);
         w.lcg = seed31(g_cfg.seed + i); // independent stream per worker
-        w.lat.assign(static_cast<size_t>(g_cfg.txns_per_thread), 0);
+        // Events mode: exact size known up front. Duration mode: unknown
+        // count, grow dynamically from a modest initial reservation.
+        w.lat.reserve(g_cfg.duration_s > 0
+                          ? 4096
+                          : static_cast<size_t>(g_cfg.txns_per_thread));
     }
 
     std::vector<std::thread> threads;
@@ -502,10 +524,15 @@ int main() {
         std::chrono::duration<double>(t_end - t_start).count();
 
     // ---- merge + statistics --------------------------------------------------
-    const int64_t txns = g_cfg.threads * g_cfg.txns_per_thread;
+    // txns = actual committed timed transactions across workers (in events
+    // mode this equals BENCH_THREADS * BENCH_TXNS_PER_THREAD).
+    size_t total = 0;
+    for (const Worker &w : workers)
+        total += w.lat.size();
+    const int64_t txns = static_cast<int64_t>(total);
     uint64_t retries = 0;
     std::vector<uint64_t> lat;
-    lat.reserve(static_cast<size_t>(txns));
+    lat.reserve(total);
     for (const Worker &w : workers) {
         retries += w.retries;
         lat.insert(lat.end(), w.lat.begin(), w.lat.end());

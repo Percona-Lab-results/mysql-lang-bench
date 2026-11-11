@@ -33,8 +33,9 @@ var (
 	txnsPerThread int
 	rangeSize     int64
 	seed          int64
-	cVal          string // "abcdefghij" x 12 (120 chars)
-	padVal        string // "0123456789" x 6  (60 chars)
+	duration      time.Duration // > 0 → duration mode; 0 → events mode
+	cVal          string        // "abcdefghij" x 12 (120 chars)
+	padVal        string        // "0123456789" x 6  (60 chars)
 )
 
 func envStr(name string) string {
@@ -54,6 +55,14 @@ func envInt(name string) int64 {
 		os.Exit(1)
 	}
 	return n
+}
+
+// envIntDefault is envInt for an optional variable: def when unset.
+func envIntDefault(name string, def int64) int64 {
+	if _, ok := os.LookupEnv(name); !ok {
+		return def
+	}
+	return envInt(name)
 }
 
 func repeat(s string, times int) string {
@@ -77,7 +86,7 @@ func percentile(sorted []int64, x int) int64 {
 type worker struct {
 	idx       int
 	lcgState  uint64  // 31-bit LCG per SPEC.md, one independent stream per worker
-	latencies []int64 // pre-allocated, one slot per timed txn, integer microseconds
+	latencies []int64 // integer microseconds; events mode: pre-allocated, one slot per timed txn; duration mode: appended to
 	retries   int64   // retryable-error count (timed window only; reset after warmup)
 
 	conn *sql.Conn
@@ -255,10 +264,21 @@ func (w *worker) run(ctx context.Context, db *sql.DB, ready, done *sync.WaitGrou
 	ready.Done()
 	<-start // released together with main's t_start sample
 
-	for i := 0; i < txnsPerThread; i++ {
-		t0 := time.Now()
-		w.runTxn(ctx)
-		w.latencies[i] = time.Since(t0).Microseconds() // truncated integer µs, retries included
+	if duration > 0 {
+		// Duration mode: deadline checked before each new transaction; a
+		// transaction in flight at the deadline (retries included) completes.
+		workerStart := time.Now()
+		for time.Since(workerStart) < duration {
+			t0 := time.Now()
+			w.runTxn(ctx)
+			w.latencies = append(w.latencies, time.Since(t0).Microseconds()) // truncated integer µs, retries included
+		}
+	} else {
+		for i := 0; i < txnsPerThread; i++ {
+			t0 := time.Now()
+			w.runTxn(ctx)
+			w.latencies[i] = time.Since(t0).Microseconds() // truncated integer µs, retries included
+		}
 	}
 
 	w.conn.Close()
@@ -278,10 +298,12 @@ func main() {
 	txnsPerThread = int(envInt("BENCH_TXNS_PER_THREAD"))
 	rangeSize = envInt("BENCH_RANGE_SIZE")
 	seed = envInt("BENCH_SEED")
-	if tableRows <= 0 || threads <= 0 || txnsPerThread <= 0 || warmupTxns < 0 || rangeSize <= 0 {
-		fmt.Fprintln(os.Stderr, "invalid workload configuration: BENCH_TABLE_ROWS, BENCH_THREADS, BENCH_TXNS_PER_THREAD, BENCH_RANGE_SIZE must be > 0 and BENCH_WARMUP_TXNS >= 0")
+	durationS := envIntDefault("BENCH_DURATION_S", 0) // 0 → events mode, > 0 → duration mode
+	if tableRows <= 0 || threads <= 0 || txnsPerThread <= 0 || warmupTxns < 0 || rangeSize <= 0 || durationS < 0 {
+		fmt.Fprintln(os.Stderr, "invalid workload configuration: BENCH_TABLE_ROWS, BENCH_THREADS, BENCH_TXNS_PER_THREAD, BENCH_RANGE_SIZE must be > 0 and BENCH_WARMUP_TXNS, BENCH_DURATION_S >= 0")
 		os.Exit(1)
 	}
+	duration = time.Duration(durationS) * time.Second
 
 	cVal = repeat("abcdefghij", 12)
 	padVal = repeat("0123456789", 6)
@@ -314,10 +336,14 @@ func main() {
 
 	workers := make([]*worker, threads)
 	for i := 0; i < threads; i++ {
+		latencies := make([]int64, txnsPerThread) // events mode: one slot per timed txn
+		if duration > 0 {
+			latencies = make([]int64, 0, 4096) // duration mode: grows by append
+		}
 		workers[i] = &worker{
 			idx:       i,
 			lcgState:  uint64(seed + int64(i)), // worker i seeds with BENCH_SEED + i
-			latencies: make([]int64, txnsPerThread),
+			latencies: latencies,
 		}
 		go workers[i].run(ctx, pool, &ready, &done, start)
 	}
@@ -328,7 +354,10 @@ func main() {
 	done.Wait()
 	elapsed := time.Since(tStart)
 
-	txns := threads * txnsPerThread
+	txns := 0 // events mode: threads*txnsPerThread; duration mode: actual committed timed txns
+	for _, w := range workers {
+		txns += len(w.latencies)
+	}
 	all := make([]int64, 0, txns)
 	var totalRetries int64
 	for _, w := range workers {

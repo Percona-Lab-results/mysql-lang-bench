@@ -86,6 +86,21 @@ static long env_int(const char *name)
     return n;
 }
 
+static long env_int_opt(const char *name, long def)
+{
+    const char *v = getenv(name);
+    if (v == NULL)
+        return def;
+    char *end = NULL;
+    long n = strtol(v, &end, 10);
+    if (end == v || *end != '\0') {
+        fprintf(stderr, "environment variable %s is not an integer: '%s'\n",
+                name, v);
+        exit(1);
+    }
+    return n;
+}
+
 /* ---------------- timing -------------------------------------------------- */
 
 static int64_t now_ns(void)
@@ -119,6 +134,7 @@ static const char *cfg_host, *cfg_user, *cfg_password, *cfg_db;
 static long cfg_port;
 static long table_rows, n_threads, warmup_txns, txns_per_thread, range_size;
 static long base_seed;
+static long duration_s; /* 0 = events mode, > 0 = fixed-duration mode */
 
 static pthread_barrier_t start_barrier;
 
@@ -180,7 +196,10 @@ typedef struct worker {
     MYSQL_BIND bp_del[1];
     MYSQL_BIND bp_ins[4];
 
-    int64_t *lat;    /* BENCH_TXNS_PER_THREAD entries, pre-allocated */
+    int64_t *lat;    /* events mode: BENCH_TXNS_PER_THREAD entries, pre-
+                        allocated; duration mode: grows by doubling */
+    long lat_cap;    /* allocated entries */
+    long lat_count;  /* committed timed transactions recorded */
     int64_t retries;
 } worker;
 
@@ -471,6 +490,24 @@ static void run_txn(worker *w)
     }
 }
 
+/* Append one latency sample; in duration mode the array grows by doubling
+   (events mode pre-allocates exactly and never hits the capacity). */
+static void record_lat(worker *w, int64_t us)
+{
+    if (w->lat_count == w->lat_cap) {
+        long new_cap = w->lat_cap * 2;
+        int64_t *p = realloc(w->lat, (size_t)new_cap * sizeof(int64_t));
+        if (p == NULL) {
+            fprintf(stderr, "failed to grow latency array (%ld entries)\n",
+                    new_cap);
+            exit(1);
+        }
+        w->lat = p;
+        w->lat_cap = new_cap;
+    }
+    w->lat[w->lat_count++] = us;
+}
+
 /* ---------------- worker thread -------------------------------------------- */
 
 static void *worker_main(void *arg)
@@ -491,10 +528,24 @@ static void *worker_main(void *arg)
 
     /* Timed loop: per-transaction latency in integer microseconds, from just
        before the first BEGIN attempt to after the successful COMMIT. */
-    for (long i = 0; i < txns_per_thread; i++) {
-        int64_t t0 = now_ns();
-        run_txn(w);
-        w->lat[i] = (now_ns() - t0) / 1000;
+    if (duration_s > 0) {
+        /* Duration mode: each worker samples its own clock and runs until
+           start + BENCH_DURATION_S, checking the deadline before each new
+           transaction; one in flight at the deadline runs to commit. */
+        int64_t deadline = now_ns() + duration_s * 1000000000LL;
+        for (;;) {
+            int64_t t0 = now_ns();
+            if (t0 >= deadline)
+                break;
+            run_txn(w);
+            record_lat(w, (now_ns() - t0) / 1000);
+        }
+    } else {
+        for (long i = 0; i < txns_per_thread; i++) {
+            int64_t t0 = now_ns();
+            run_txn(w);
+            record_lat(w, (now_ns() - t0) / 1000);
+        }
     }
 
     for (int j = 0; j < ST_COUNT; j++)
@@ -522,9 +573,11 @@ int main(void)
     txns_per_thread = env_int("BENCH_TXNS_PER_THREAD");
     range_size = env_int("BENCH_RANGE_SIZE");
     base_seed = env_int("BENCH_SEED");
+    duration_s = env_int_opt("BENCH_DURATION_S", 0);
 
-    if (n_threads <= 0 || txns_per_thread <= 0 || table_rows <= 0 ||
-        range_size <= 0 || warmup_txns < 0) {
+    if (n_threads <= 0 || table_rows <= 0 || range_size <= 0 ||
+        warmup_txns < 0 || duration_s < 0 ||
+        (duration_s == 0 && txns_per_thread <= 0)) {
         fprintf(stderr, "invalid workload configuration\n");
         return 1;
     }
@@ -540,15 +593,20 @@ int main(void)
         fprintf(stderr, "failed to allocate %ld worker structs\n", n_threads);
         return 1;
     }
+    /* Events mode pre-allocates exactly; duration mode seeds a small
+       capacity that record_lat() grows by doubling. */
+    long lat_seed_cap = duration_s > 0 ? 4096 : txns_per_thread;
     for (long i = 0; i < n_threads; i++) {
         workers[i].index = (int)i;
         workers[i].prng_state = base_seed + i;
         workers[i].retries = 0;
+        workers[i].lat_cap = lat_seed_cap;
+        workers[i].lat_count = 0;
         workers[i].lat =
-            malloc((size_t)txns_per_thread * sizeof(int64_t));
+            malloc((size_t)lat_seed_cap * sizeof(int64_t));
         if (workers[i].lat == NULL) {
-            fprintf(stderr, "failed to allocate latency array (%ld txns)\n",
-                    txns_per_thread);
+            fprintf(stderr, "failed to allocate latency array (%ld entries)\n",
+                    lat_seed_cap);
             return 1;
         }
     }
@@ -583,17 +641,22 @@ int main(void)
 
     const char *driver_version = mysql_get_client_info();
 
-    /* Merge latency arrays, sort, percentiles. */
-    long txns = n_threads * txns_per_thread;
+    /* Merge latency arrays, sort, percentiles. txns = committed timed
+       transactions across workers (events mode: threads * txns_per_thread). */
+    long txns = 0;
+    for (long i = 0; i < n_threads; i++)
+        txns += workers[i].lat_count;
     int64_t *lat = malloc((size_t)txns * sizeof(int64_t));
     if (lat == NULL) {
         fprintf(stderr, "failed to allocate merged latency array\n");
         return 1;
     }
     int64_t retries = 0;
+    long merged = 0;
     for (long i = 0; i < n_threads; i++) {
-        memcpy(lat + i * txns_per_thread, workers[i].lat,
-               (size_t)txns_per_thread * sizeof(int64_t));
+        memcpy(lat + merged, workers[i].lat,
+               (size_t)workers[i].lat_count * sizeof(int64_t));
+        merged += workers[i].lat_count;
         retries += workers[i].retries;
         free(workers[i].lat);
     }

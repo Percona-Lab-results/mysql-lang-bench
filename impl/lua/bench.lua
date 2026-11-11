@@ -108,6 +108,16 @@ local function env_int(name)
     return n
 end
 
+local function env_int_opt(name, default)
+    local v = os.getenv(name)
+    if v == nil or v == "" then return default end
+    local n = tonumber(v)
+    if n == nil or n ~= math.floor(n) then
+        fail("environment variable " .. name .. " is not an integer: '" .. v .. "'")
+    end
+    return n
+end
+
 ---------------------------------------------------------------------------
 -- Configuration (environment only; no CLI arguments)
 ---------------------------------------------------------------------------
@@ -129,10 +139,12 @@ local cfg = {
     txns_per_thread = env_int("BENCH_TXNS_PER_THREAD"),
     range_size      = env_int("BENCH_RANGE_SIZE"),
     seed            = env_int("BENCH_SEED"),
+    duration_s      = env_int_opt("BENCH_DURATION_S", 0), -- 0 = events mode
 }
 
 if cfg.threads < 1 or cfg.txns_per_thread < 1 or cfg.table_rows < 1
-    or cfg.range_size < 1 or cfg.warmup_txns < 0 or cfg.seed < 0 then
+    or cfg.range_size < 1 or cfg.warmup_txns < 0 or cfg.seed < 0
+    or cfg.duration_s < 0 then
     fail("invalid workload configuration")
 end
 
@@ -331,14 +343,32 @@ local function worker_main(worker_idx, ready_w, start_r)
 
     -- Timed run: per-txn latency in integer microseconds (truncated), from
     -- just before the first BEGIN to after the successful COMMIT, retries
-    -- included. Latency array is pre-allocated.
-    local txns = cfg.txns_per_thread
+    -- included.
+    local txns
     local lat = {}
-    for i = 1, txns do lat[i] = 0 end
-    for i = 1, txns do
-        local t0 = now_ns()
-        run_txn()
-        lat[i] = tonumber((now_ns() - t0) / 1000LL) -- int64 division truncates
+    if cfg.duration_s > 0 then
+        -- Duration mode: loop until start + BENCH_DURATION_S, checking the
+        -- deadline BEFORE each new transaction; an in-flight transaction
+        -- (retries included) runs to commit. Deadline math stays in int64
+        -- cdata (now_ns() returns int64; the LL literal promotes the product).
+        local deadline = now_ns() + cfg.duration_s * 1000000000LL
+        txns = 0
+        while now_ns() < deadline do
+            local t0 = now_ns()
+            run_txn()
+            txns = txns + 1
+            lat[txns] = tonumber((now_ns() - t0) / 1000LL) -- truncating int64 div
+        end
+    else
+        -- Events mode: exactly txns_per_thread transactions; latency array
+        -- pre-allocated.
+        txns = cfg.txns_per_thread
+        for i = 1, txns do lat[i] = 0 end
+        for i = 1, txns do
+            local t0 = now_ns()
+            run_txn()
+            lat[i] = tonumber((now_ns() - t0) / 1000LL) -- int64 division truncates
+        end
     end
 
     mysql.mysql_close(conn)
@@ -476,6 +506,7 @@ end
 -- Merge per-worker result files.
 local latencies = {}
 local total_retries = 0
+local total_txns = 0
 for i = 1, threads do
     local path = result_file_path(pids[i])
     local f = io.open(path, "r")
@@ -503,10 +534,15 @@ for i = 1, threads do
     if retr == nil then
         fail("malformed result file for worker " .. (i - 1) .. ": " .. path)
     end
-    if count ~= cfg.txns_per_thread then
+    if cfg.duration_s > 0 then
+        if count < 1 then
+            fail("worker " .. (i - 1) .. " reported no latencies: " .. path)
+        end
+    elseif count ~= cfg.txns_per_thread then
         fail("worker " .. (i - 1) .. " reported " .. count ..
              " latencies, expected " .. cfg.txns_per_thread)
     end
+    total_txns = total_txns + count
     total_retries = total_retries + retr
 end
 
@@ -519,7 +555,9 @@ local function pct(x)
 end
 local max_us = latencies[n]
 
-local txns = threads * cfg.txns_per_thread
+-- Events mode: total_txns == threads * txns_per_thread (validated above).
+-- Duration mode: total committed timed transactions across workers.
+local txns = total_txns
 local elapsed_s = tonumber(t_end - t_start) / 1e9
 local tps = txns / elapsed_s
 

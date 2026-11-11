@@ -23,6 +23,24 @@ for L in $LANGS; do
         overall="FAILED ($L prepare)"
         break
     fi
+    # Fixed-duration mode: one long READ-ONLY sysbench warm-up per sweep,
+    # after the load and before rung 1, to initialize the server caches.
+    # Read-only keeps the table byte-identical for every language.
+    if [ "${BENCH_DURATION_S:-0}" -gt 0 ] && [ "${BENCH_SYSBENCH_WARMUP_S:-0}" -gt 0 ]; then
+        echo "RUNNING $L sysbench-warmup (${BENCH_SYSBENCH_WARMUP_S}s)" > "$STATUS"
+        if ! (
+            set -euo pipefail
+            set -a; source config/mysql.env; source common/workload.env; set +a
+            sysbench common/sysbench_warmup.lua \
+                --mysql-host="$MYSQL_HOST" --mysql-port="$MYSQL_PORT" \
+                --mysql-user="$MYSQL_USER" --mysql-password="$MYSQL_PASSWORD" \
+                --mysql-db="$MYSQL_DB" --threads=32 \
+                --time="$BENCH_SYSBENCH_WARMUP_S" --report-interval=60 run
+        ) >> "$LOG" 2>&1; then
+            overall="FAILED ($L sysbench-warmup)"
+            break
+        fi
+    fi
     for T in $BENCH_THREADS_LIST; do
         echo "RUNNING $L t=$T" > "$STATUS"
         if (
