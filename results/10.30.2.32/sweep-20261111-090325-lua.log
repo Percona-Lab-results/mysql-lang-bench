@@ -1,0 +1,11 @@
+Table	Op	Msg_type	Msg_text
+bench.sbtest	analyze	status	OK
+table reloaded: 10000000 rows
+lua t=4 ok
+lua t=8 ok
+lua t=16 ok
+lua t=32 ok
+lua t=64 ok
+lua t=128 ok
+lua t=256 ok
+lua t=512 ok

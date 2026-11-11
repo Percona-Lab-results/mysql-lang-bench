@@ -13,7 +13,7 @@
     --border: rgba(11,11,11,0.10);
     --cat-1: #2a78d6; --cat-2: #eb6834; --cat-3: #1baf7a; --cat-4: #eda100;
     --cat-5: #e87ba4; --cat-6: #008300; --cat-7: #6250d6; --cat-8: #e34948;
-    --cat-9: #84b000; --cat-10: #0092c4; --cat-11: #8c5a2b; --cat-12: #b5174e;
+    --cat-9: #84b000; --cat-10: #0092c4; --cat-11: #8c5a2b; --cat-12: #b5174e; --cat-13: #00847c;
   }
   @media (prefers-color-scheme: dark) {
     :root:where(:not([data-theme="light"])) .viz-root {
@@ -24,7 +24,7 @@
       --border: rgba(255,255,255,0.10);
       --cat-1: #3987e5; --cat-2: #d95926; --cat-3: #199e70; --cat-4: #c98500;
       --cat-5: #d55181; --cat-6: #008300; --cat-7: #9085e9; --cat-8: #e66767;
-      --cat-9: #a3c636; --cat-10: #35b5e0; --cat-11: #b07845; --cat-12: #d6447c;
+      --cat-9: #a3c636; --cat-10: #35b5e0; --cat-11: #b07845; --cat-12: #d6447c; --cat-13: #2aaea5;
     }
   }
   :root[data-theme="dark"] .viz-root {
@@ -35,7 +35,7 @@
     --border: rgba(255,255,255,0.10);
     --cat-1: #3987e5; --cat-2: #d95926; --cat-3: #199e70; --cat-4: #c98500;
     --cat-5: #d55181; --cat-6: #008300; --cat-7: #9085e9; --cat-8: #e66767;
-    --cat-9: #a3c636; --cat-10: #35b5e0; --cat-11: #b07845; --cat-12: #d6447c;
+    --cat-9: #a3c636; --cat-10: #35b5e0; --cat-11: #b07845; --cat-12: #d6447c; --cat-13: #2aaea5;
   }
   * { box-sizing: border-box; }
   body.viz-root {
@@ -122,6 +122,7 @@
 <tr><th scope="row">Swift</th><td class="num">2,393</td><td class="num">4,590</td><td class="num">8,948</td><td class="num">15,642</td><td class="num">23,533</td><td class="num">29,335</td><td class="num">28,139</td><td class="num">26,108</td></tr>
 <tr><th scope="row">Rust</th><td class="num">2,268</td><td class="num">4,464</td><td class="num">8,232</td><td class="num">14,272</td><td class="num">22,126</td><td class="num">27,045</td><td class="num">27,354</td><td class="num">25,498</td></tr>
 <tr><th scope="row">PHP</th><td class="num">2,243</td><td class="num">4,347</td><td class="num">8,196</td><td class="num">14,670</td><td class="num">21,392</td><td class="num">27,029</td><td class="num">26,050</td><td class="num">23,481</td></tr>
+<tr><th scope="row">Lua</th><td class="num">2,087</td><td class="num">3,939</td><td class="num">7,444</td><td class="num">13,654</td><td class="num">20,641</td><td class="num">25,936</td><td class="num">25,274</td><td class="num">23,194</td></tr>
 <tr><th scope="row">Java</th><td class="num">1,964</td><td class="num">3,785</td><td class="num">7,396</td><td class="num">12,850</td><td class="num">18,855</td><td class="num">23,231</td><td class="num">22,464</td><td class="num">20,170</td></tr>
 <tr><th scope="row">C#</th><td class="num">1,906</td><td class="num">3,606</td><td class="num">6,801</td><td class="num">11,035</td><td class="num">12,794</td><td class="num">10,900</td><td class="num">6,827</td><td class="num">3,727</td></tr>
 <tr><th scope="row">Go</th><td class="num">2,090</td><td class="num">3,924</td><td class="num">6,841</td><td class="num">5,090</td><td class="num">4,824</td><td class="num">5,443</td><td class="num">9,429</td><td class="num">9,813</td></tr>
@@ -146,6 +147,7 @@
 <tr><th scope="row">Swift</th><td class="num">300</td><td class="num">310</td><td class="num">336</td><td class="num">390</td><td class="num">519</td><td class="num">483</td><td class="num">505</td><td class="num">550</td></tr>
 <tr><th scope="row">Rust</th><td class="num">378</td><td class="num">398</td><td class="num">433</td><td class="num">497</td><td class="num">671</td><td class="num">641</td><td class="num">680</td><td class="num">737</td></tr>
 <tr><th scope="row">PHP</th><td class="num">439</td><td class="num">417</td><td class="num">484</td><td class="num">546</td><td class="num">789</td><td class="num">735</td><td class="num">788</td><td class="num">908</td></tr>
+<tr><th scope="row">Lua</th><td class="num">314</td><td class="num">329</td><td class="num">352</td><td class="num">424</td><td class="num">597</td><td class="num">557</td><td class="num">591</td><td class="num">679</td></tr>
 <tr><th scope="row">Java</th><td class="num">1,622</td><td class="num">1,298</td><td class="num">1,120</td><td class="num">1,137</td><td class="num">1,376</td><td class="num">1,300</td><td class="num">1,198</td><td class="num">1,364</td></tr>
 <tr><th scope="row">C#</th><td class="num">858</td><td class="num">825</td><td class="num">817</td><td class="num">895</td><td class="num">1,134</td><td class="num">1,071</td><td class="num">1,114</td><td class="num">1,381</td></tr>
 <tr><th scope="row">Go</th><td class="num">604</td><td class="num">652</td><td class="num">823</td><td class="num">2,930</td><td class="num">4,042</td><td class="num">4,641</td><td class="num">4,241</td><td class="num">3,986</td></tr>
@@ -160,6 +162,7 @@
 <tr><th scope="row">Swift</th><td class="num">1,565</td><td class="num">1,558</td><td class="num">1,601</td><td class="num">1,803</td><td class="num">2,300</td><td class="num">2,162</td><td class="num">2,310</td><td class="num">2,526</td></tr>
 <tr><th scope="row">Rust</th><td class="num">1,569</td><td class="num">1,561</td><td class="num">1,612</td><td class="num">1,839</td><td class="num">2,326</td><td class="num">2,145</td><td class="num">2,209</td><td class="num">2,403</td></tr>
 <tr><th scope="row">PHP</th><td class="num">1,552</td><td class="num">1,551</td><td class="num">1,614</td><td class="num">1,802</td><td class="num">2,329</td><td class="num">2,140</td><td class="num">2,271</td><td class="num">2,508</td></tr>
+<tr><th scope="row">Lua</th><td class="num">1,822</td><td class="num">1,818</td><td class="num">1,860</td><td class="num">2,073</td><td class="num">2,657</td><td class="num">2,457</td><td class="num">2,565</td><td class="num">2,793</td></tr>
 <tr><th scope="row">Java</th><td class="num">1,545</td><td class="num">1,571</td><td class="num">1,618</td><td class="num">1,877</td><td class="num">2,467</td><td class="num">2,342</td><td class="num">2,520</td><td class="num">2,782</td></tr>
 <tr><th scope="row">C#</th><td class="num">1,570</td><td class="num">1,571</td><td class="num">1,654</td><td class="num">1,835</td><td class="num">2,418</td><td class="num">2,295</td><td class="num">2,429</td><td class="num">2,594</td></tr>
 <tr><th scope="row">Go</th><td class="num">1,529</td><td class="num">1,564</td><td class="num">1,730</td><td class="num">2,299</td><td class="num">2,442</td><td class="num">2,561</td><td class="num">2,600</td><td class="num">2,549</td></tr>
@@ -207,7 +210,7 @@
 <div id="tooltip" role="status"></div>
 
 <script>
-const DATA = {"threads":[4,8,16,32,64,128,256,512],"series":[{"lang":"c","name":"C","driver":"libmysqlclient 8.0.46","tps":[2302.7,4650.7,8740.4,15650.2,23701.9,29792.5,29105.9,27052.7],"cli":[323,319,323,392,518,483,499,544],"srv":[1582,1567,1603,1801,2281,2110,2227,2424],"peak":29792.5},{"lang":"cpp","name":"C++","driver":"libmysqlclient 8.0.46","tps":[2370.5,4786.1,8891.8,15737.3,23976.0,27626.2,29437.0,28254.9],"cli":[292,309,327,386,513,494,493,525],"srv":[1575,1527,1588,1780,2260,2182,2217,2322],"peak":29437.0},{"lang":"swift","name":"Swift","driver":"libmysqlclient 8.0.46","tps":[2392.9,4589.7,8947.6,15642.2,23532.8,29334.8,28139.3,26107.5],"cli":[300,310,336,390,519,483,505,550],"srv":[1565,1558,1601,1803,2300,2162,2310,2526],"peak":29334.8},{"lang":"rust","name":"Rust","driver":"mysql crate 25.0.1","tps":[2268.2,4464.0,8231.8,14272.4,22125.8,27044.6,27353.6,25497.8],"cli":[378,398,433,497,671,641,680,737],"srv":[1569,1561,1612,1839,2326,2145,2209,2403],"peak":27353.6},{"lang":"php","name":"PHP","driver":"mysqli mysqlnd 8.3.6","tps":[2242.8,4347.1,8195.9,14670.5,21391.7,27029.0,26050.2,23481.4],"cli":[439,417,484,546,789,735,788,908],"srv":[1552,1551,1614,1802,2329,2140,2271,2508],"peak":27029.0},{"lang":"java","name":"Java","driver":"Connector/J mysql-connector-j-8.4.0 (Revision: 1c3f5c149e0bfe31c7fbeb24e2d260cd890972c4)","tps":[1963.5,3785.2,7396.4,12849.7,18855.0,23230.8,22464.4,20170.1],"cli":[1622,1298,1120,1137,1376,1300,1198,1364],"srv":[1545,1571,1618,1877,2467,2342,2520,2782],"peak":23230.8},{"lang":"csharp","name":"C#","driver":"MySqlConnector 2.4.0","tps":[1906.4,3605.8,6801.3,11034.9,12794.0,10900.2,6826.8,3727.2],"cli":[858,825,817,895,1134,1071,1114,1381],"srv":[1570,1571,1654,1835,2418,2295,2429,2594],"peak":12794.0},{"lang":"go","name":"Go","driver":"go-sql-driver/mysql 1.9.3","tps":[2090.1,3924.1,6841.3,5090.1,4824.1,5443.4,9428.7,9813.4],"cli":[604,652,823,2930,4042,4641,4241,3986],"srv":[1529,1564,1730,2299,2442,2561,2600,2549],"peak":9813.4},{"lang":"javascript","name":"JavaScript","driver":"mysql2 3.24.6","tps":[1135.2,2186.3,4010.9,6212.5,7842.1,7879.2,6284.8,5092.7],"cli":[2840,2896,3055,3960,6115,7151,9639,12416],"srv":[1615,1614,1671,2108,2811,2984,3355,3575],"peak":7879.2},{"lang":"typescript","name":"TypeScript","driver":"mysql2 3.24.6","tps":[1108.7,2059.9,4057.0,6191.2,7741.1,7736.6,6518.1,5135.4],"cli":[2819,2967,3054,4001,6273,7356,9150,12254],"srv":[1628,1649,1676,2123,2800,2984,3339,3626],"peak":7741.1},{"lang":"python","name":"Python","driver":"mysqlclient 2.3.0 (libmysqlclient 8.4.9)","tps":[1198.3,1128.8,1094.9,1020.7,947.8,905.0,870.7,833.5],"cli":[1254,1589,1641,1758,1901,1992,2075,2569],"srv":[1862,1886,2001,2136,2293,2399,2496,2661],"peak":1198.3},{"lang":"ruby","name":"Ruby","driver":"mysql2 0.5.7 (libmysqlclient 8.0.46)","tps":[801.5,999.4,963.6,926.1,864.2,782.5,719.8,692.0],"cli":[2174,2196,2323,2766,3490,4222,4321,4664],"srv":[1906,1872,1969,2122,2292,2452,2569,2647],"peak":999.4}],"srvLo":[1529,1527,1588,1780,2260,2110,2209,2322],"srvHi":[1906,1886,2001,2299,2811,2984,3355,3626]};
+const DATA = {"threads":[4,8,16,32,64,128,256,512],"series":[{"lang":"c","name":"C","driver":"libmysqlclient 8.0.46","tps":[2302.7,4650.7,8740.4,15650.2,23701.9,29792.5,29105.9,27052.7],"cli":[323,319,323,392,518,483,499,544],"srv":[1582,1567,1603,1801,2281,2110,2227,2424],"peak":29792.5},{"lang":"cpp","name":"C++","driver":"libmysqlclient 8.0.46","tps":[2370.5,4786.1,8891.8,15737.3,23976.0,27626.2,29437.0,28254.9],"cli":[292,309,327,386,513,494,493,525],"srv":[1575,1527,1588,1780,2260,2182,2217,2322],"peak":29437.0},{"lang":"swift","name":"Swift","driver":"libmysqlclient 8.0.46","tps":[2392.9,4589.7,8947.6,15642.2,23532.8,29334.8,28139.3,26107.5],"cli":[300,310,336,390,519,483,505,550],"srv":[1565,1558,1601,1803,2300,2162,2310,2526],"peak":29334.8},{"lang":"rust","name":"Rust","driver":"mysql crate 25.0.1","tps":[2268.2,4464.0,8231.8,14272.4,22125.8,27044.6,27353.6,25497.8],"cli":[378,398,433,497,671,641,680,737],"srv":[1569,1561,1612,1839,2326,2145,2209,2403],"peak":27353.6},{"lang":"php","name":"PHP","driver":"mysqli mysqlnd 8.3.6","tps":[2242.8,4347.1,8195.9,14670.5,21391.7,27029.0,26050.2,23481.4],"cli":[439,417,484,546,789,735,788,908],"srv":[1552,1551,1614,1802,2329,2140,2271,2508],"peak":27029.0},{"lang":"lua","name":"Lua","driver":"libmysqlclient (LuaJIT FFI) 8.4.9","tps":[2086.7,3938.9,7444.1,13654.3,20640.8,25936.4,25273.6,23193.9],"cli":[314,329,352,424,597,557,591,679],"srv":[1822,1818,1860,2073,2657,2457,2565,2793],"peak":25936.4},{"lang":"java","name":"Java","driver":"Connector/J mysql-connector-j-8.4.0 (Revision: 1c3f5c149e0bfe31c7fbeb24e2d260cd890972c4)","tps":[1963.5,3785.2,7396.4,12849.7,18855.0,23230.8,22464.4,20170.1],"cli":[1622,1298,1120,1137,1376,1300,1198,1364],"srv":[1545,1571,1618,1877,2467,2342,2520,2782],"peak":23230.8},{"lang":"csharp","name":"C#","driver":"MySqlConnector 2.4.0","tps":[1906.4,3605.8,6801.3,11034.9,12794.0,10900.2,6826.8,3727.2],"cli":[858,825,817,895,1134,1071,1114,1381],"srv":[1570,1571,1654,1835,2418,2295,2429,2594],"peak":12794.0},{"lang":"go","name":"Go","driver":"go-sql-driver/mysql 1.9.3","tps":[2090.1,3924.1,6841.3,5090.1,4824.1,5443.4,9428.7,9813.4],"cli":[604,652,823,2930,4042,4641,4241,3986],"srv":[1529,1564,1730,2299,2442,2561,2600,2549],"peak":9813.4},{"lang":"javascript","name":"JavaScript","driver":"mysql2 3.24.6","tps":[1135.2,2186.3,4010.9,6212.5,7842.1,7879.2,6284.8,5092.7],"cli":[2840,2896,3055,3960,6115,7151,9639,12416],"srv":[1615,1614,1671,2108,2811,2984,3355,3575],"peak":7879.2},{"lang":"typescript","name":"TypeScript","driver":"mysql2 3.24.6","tps":[1108.7,2059.9,4057.0,6191.2,7741.1,7736.6,6518.1,5135.4],"cli":[2819,2967,3054,4001,6273,7356,9150,12254],"srv":[1628,1649,1676,2123,2800,2984,3339,3626],"peak":7741.1},{"lang":"python","name":"Python","driver":"mysqlclient 2.3.0 (libmysqlclient 8.4.9)","tps":[1198.3,1128.8,1094.9,1020.7,947.8,905.0,870.7,833.5],"cli":[1254,1589,1641,1758,1901,1992,2075,2569],"srv":[1862,1886,2001,2136,2293,2399,2496,2661],"peak":1198.3},{"lang":"ruby","name":"Ruby","driver":"mysql2 0.5.7 (libmysqlclient 8.0.46)","tps":[801.5,999.4,963.6,926.1,864.2,782.5,719.8,692.0],"cli":[2174,2196,2323,2766,3490,4222,4321,4664],"srv":[1906,1872,1969,2122,2292,2452,2569,2647],"peak":999.4}],"srvLo":[1529,1527,1588,1780,2260,2110,2209,2322],"srvHi":[1906,1886,2001,2299,2811,2984,3355,3626]};
 (function () {
   "use strict";
   const T = DATA.threads, N = T.length;
@@ -239,6 +242,7 @@ const DATA = {"threads":[4,8,16,32,64,128,256,512],"series":[{"lang":"c","name":
     typescript: { slot: 9,  shape: "star"     }, // lime   (vs csharp brown)
     python:     { slot: 7,  shape: "plus"     }, // purple (vs java green)
     ruby:       { slot: 12, shape: "triangle" }, // crimson (vs swift aqua)
+    lua:        { slot: 13, shape: "x"        }, // teal (unique shape)
   };
   const styleFor = lang => {
     const s = STYLE[lang] || { slot: 1, shape: "circle" };
@@ -265,6 +269,10 @@ const DATA = {"threads":[4,8,16,32,64,128,256,512],"series":[{"lang":"c","name":
         pts.push((x + r * Math.cos(ang)).toFixed(2) + " " + (y + r * Math.sin(ang)).toFixed(2));
       }
       return el("path", { d: "M " + pts.join(" L ") + " Z", ...common });
+    }
+    if (shape === "x") {
+      const a = 1.5, p = s + 0.8, m = a * 1.42;
+      return el("path", { d: `M ${x - p} ${y - p + m} L ${x - m} ${y - p} L ${x} ${y - m} L ${x + m} ${y - p} L ${x + p} ${y - p + m} L ${x + m} ${y} L ${x + p} ${y + p - m} L ${x + m} ${y + p} L ${x} ${y + m} L ${x - m} ${y + p} L ${x - p} ${y + p - m} L ${x - m} ${y} Z`, ...common });
     }
     return el("path", { d: `M ${x} ${y - s - 1} L ${x + s + 1} ${y} L ${x} ${y + s + 1} L ${x - s - 1} ${y} Z`, ...common }); // diamond
   }

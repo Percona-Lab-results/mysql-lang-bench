@@ -19,6 +19,7 @@ DISPLAY = {
     "c": "C", "cpp": "C++", "swift": "Swift", "rust": "Rust", "php": "PHP",
     "java": "Java", "csharp": "C#", "go": "Go", "javascript": "JavaScript",
     "typescript": "TypeScript", "python": "Python", "ruby": "Ruby",
+    "lua": "Lua",
 }
 
 
@@ -126,7 +127,7 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
     --border: rgba(11,11,11,0.10);
     --cat-1: #2a78d6; --cat-2: #eb6834; --cat-3: #1baf7a; --cat-4: #eda100;
     --cat-5: #e87ba4; --cat-6: #008300; --cat-7: #6250d6; --cat-8: #e34948;
-    --cat-9: #84b000; --cat-10: #0092c4; --cat-11: #8c5a2b; --cat-12: #b5174e;
+    --cat-9: #84b000; --cat-10: #0092c4; --cat-11: #8c5a2b; --cat-12: #b5174e; --cat-13: #00847c;
   }
   @media (prefers-color-scheme: dark) {
     :root:where(:not([data-theme="light"])) .viz-root {
@@ -137,7 +138,7 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
       --border: rgba(255,255,255,0.10);
       --cat-1: #3987e5; --cat-2: #d95926; --cat-3: #199e70; --cat-4: #c98500;
       --cat-5: #d55181; --cat-6: #008300; --cat-7: #9085e9; --cat-8: #e66767;
-      --cat-9: #a3c636; --cat-10: #35b5e0; --cat-11: #b07845; --cat-12: #d6447c;
+      --cat-9: #a3c636; --cat-10: #35b5e0; --cat-11: #b07845; --cat-12: #d6447c; --cat-13: #2aaea5;
     }
   }
   :root[data-theme="dark"] .viz-root {
@@ -148,7 +149,7 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
     --border: rgba(255,255,255,0.10);
     --cat-1: #3987e5; --cat-2: #d95926; --cat-3: #199e70; --cat-4: #c98500;
     --cat-5: #d55181; --cat-6: #008300; --cat-7: #9085e9; --cat-8: #e66767;
-    --cat-9: #a3c636; --cat-10: #35b5e0; --cat-11: #b07845; --cat-12: #d6447c;
+    --cat-9: #a3c636; --cat-10: #35b5e0; --cat-11: #b07845; --cat-12: #d6447c; --cat-13: #2aaea5;
   }
   * { box-sizing: border-box; }
   body.viz-root {
@@ -313,6 +314,7 @@ const DATA = __DATA__;
     typescript: { slot: 9,  shape: "star"     }, // lime   (vs csharp brown)
     python:     { slot: 7,  shape: "plus"     }, // purple (vs java green)
     ruby:       { slot: 12, shape: "triangle" }, // crimson (vs swift aqua)
+    lua:        { slot: 13, shape: "x"        }, // teal (unique shape)
   };
   const styleFor = lang => {
     const s = STYLE[lang] || { slot: 1, shape: "circle" };
@@ -339,6 +341,10 @@ const DATA = __DATA__;
         pts.push((x + r * Math.cos(ang)).toFixed(2) + " " + (y + r * Math.sin(ang)).toFixed(2));
       }
       return el("path", { d: "M " + pts.join(" L ") + " Z", ...common });
+    }
+    if (shape === "x") {
+      const a = 1.5, p = s + 0.8, m = a * 1.42;
+      return el("path", { d: `M ${x - p} ${y - p + m} L ${x - m} ${y - p} L ${x} ${y - m} L ${x + m} ${y - p} L ${x + p} ${y - p + m} L ${x + m} ${y} L ${x + p} ${y + p - m} L ${x + m} ${y + p} L ${x} ${y + m} L ${x - m} ${y + p} L ${x - p} ${y + p - m} L ${x - m} ${y} Z`, ...common });
     }
     return el("path", { d: `M ${x} ${y - s - 1} L ${x + s + 1} ${y} L ${x} ${y + s + 1} L ${x - s - 1} ${y} Z`, ...common }); // diamond
   }
