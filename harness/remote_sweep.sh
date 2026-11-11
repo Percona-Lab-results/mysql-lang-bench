@@ -23,10 +23,10 @@ for L in $LANGS; do
         overall="FAILED ($L prepare)"
         break
     fi
-    # Fixed-duration mode: one long READ-ONLY sysbench warm-up per sweep,
-    # after the load and before rung 1, to initialize the server caches.
-    # Read-only keeps the table byte-identical for every language.
-    if [ "${BENCH_DURATION_S:-0}" -gt 0 ] && [ "${BENCH_SYSBENCH_WARMUP_S:-0}" -gt 0 ]; then
+    # One long READ-ONLY sysbench warm-up per sweep (both modes), after the
+    # load and before rung 1, to initialize the server caches. Read-only
+    # keeps the table byte-identical for every language.
+    if [ "${BENCH_SYSBENCH_WARMUP_S:-0}" -gt 0 ]; then
         echo "RUNNING $L sysbench-warmup (${BENCH_SYSBENCH_WARMUP_S}s)" > "$STATUS"
         if ! (
             set -euo pipefail

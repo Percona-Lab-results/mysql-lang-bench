@@ -129,8 +129,8 @@ Any other error: print to stderr, exit non-zero.
   before the barrier in both modes.
 
 The harness additionally runs a single long read-only sysbench warm-up after
-the data load and before rung 1 of a sweep (buffer-pool initialization); that
-is outside the implementations' scope.
+the data load and before rung 1 of a sweep (buffer-pool initialization), in
+BOTH modes; that is outside the implementations' scope.
 
 ## Timing and statistics
 
