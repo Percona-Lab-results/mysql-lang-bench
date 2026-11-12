@@ -71,7 +71,10 @@ def build_mode(latest, mode):
             series.append({
                 "lang": lang,
                 "name": DISPLAY.get(lang, lang) + (" (stock)" if stock else ""),
-                "driver": drv, "dash": stock,
+                "driver": drv,
+                # variant drives the optimized/stock toggle: "na" always shown,
+                # "tuned"/"stock" shown depending on the toggle (Go and C#).
+                "variant": "stock" if variant is False else ("tuned" if variant is True else "na"),
                 "tps": tps, "cli": cli, "srv": srv,
                 "peak": max(v for v in tps if v is not None),
             })
@@ -109,13 +112,15 @@ def main():
         print("no mode-tagged CPU-instrumented results found", file=sys.stderr)
         sys.exit(1)
 
-    # KPI row from the primary mode (events if present)
+    # KPI row from the primary mode (events if present), optimized view
+    # (tuned Go/C# + the others) — the default the page loads with.
     pm = modes.get("events") or next(iter(modes.values()))
-    best = pm["series"][0]
+    view = [s for s in pm["series"] if s["variant"] in ("na", "tuned")]
+    best = view[0]
     peak_t = pm["threads"][best["tps"].index(best["peak"])]
-    cheapest = min(pm["series"], key=lambda s: min(v for v in s["cli"] if v is not None))
+    cheapest = min(view, key=lambda s: min(v for v in s["cli"] if v is not None))
     cheap_v = min(v for v in cheapest["cli"] if v is not None)
-    dearest = max(pm["series"], key=lambda s: max(v for v in s["cli"] if v is not None))
+    dearest = max(view, key=lambda s: max(v for v in s["cli"] if v is not None))
     dear_v = max(v for v in dearest["cli"] if v is not None)
     kpis = [
         ("Peak throughput", f"{best['peak']:,.0f} tps", f"{best['name']} at {peak_t} threads"),
@@ -246,11 +251,18 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
   header.page { display: flex; justify-content: space-between; align-items: baseline; gap: 16px; flex-wrap: wrap; }
   h1 { font-size: 21px; margin: 0; }
   .context { color: var(--text-secondary); margin: 6px 0 0; max-width: 72ch; }
+  .controls { display: flex; gap: 12px; align-items: center; flex-wrap: wrap; }
   #theme-toggle {
     border: 1px solid var(--border); background: var(--surface-1);
     color: var(--text-secondary); border-radius: 8px; padding: 6px 12px;
     cursor: pointer; font: inherit; font-size: 13px;
   }
+  .toggle {
+    display: inline-flex; align-items: center; gap: 7px; cursor: pointer;
+    border: 1px solid var(--border); background: var(--surface-1);
+    color: var(--text-secondary); border-radius: 8px; padding: 6px 12px; font-size: 13px;
+  }
+  .toggle input { cursor: pointer; margin: 0; }
   .kpis { display: grid; grid-template-columns: repeat(auto-fit, minmax(210px, 1fr)); gap: 12px; margin: 22px 0 8px; }
   .tile { background: var(--surface-1); border: 1px solid var(--border); border-radius: 10px; padding: 14px 16px; }
   .tile-label { color: var(--text-secondary); font-size: 13px; }
@@ -303,12 +315,15 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
       one language per pristine data load, 15-minute read-only sysbench warm-up before each sweep,
       client and server on the same 80-core host. Workers: 4&nbsp;&rarr;&nbsp;512.
       Work-based workload: every worker runs a fixed 10,000 transactions per rung.
-      Go and C# appear twice — a solid line for tuned runtime settings
-      (Go <code>GOMAXPROCS=16 GOGC=800</code>; C# server GC) and a dashed
-      <em>(stock)</em> line for the stock runtime defaults, so the tuning gain is
-      visible. The other languages run on stock defaults.</p>
+      Use the <em>Optimized Go/C#</em> toggle to plot either the tuned runtime
+      settings (Go <code>GOMAXPROCS=16 GOGC=800</code>; C# server GC) or the
+      stock runtime defaults for those two languages. The other languages always
+      run on stock defaults.</p>
     </div>
-    <button id="theme-toggle" type="button">Toggle dark mode</button>
+    <div class="controls">
+      <label class="toggle"><input type="checkbox" id="opt-toggle"> Optimized Go/C#</label>
+      <button id="theme-toggle" type="button">Toggle dark mode</button>
+    </div>
   </header>
 
   <div class="kpis">__KPIS__</div>
@@ -337,6 +352,24 @@ const DATA = __DATA__;
     const sec = document.getElementById("sec-" + pngMatch[1]);
     if (sec) sec.classList.add("png-show");
   }
+
+  // Optimized Go/C# toggle, driven by ?optimized=0|1 (default 1 = tuned).
+  // The graphs plot the tuned variant when on, the stock variant when off.
+  const params = new URLSearchParams(location.search);
+  const optimized = params.get("optimized") !== "0";
+  const optToggle = document.getElementById("opt-toggle");
+  if (optToggle) {
+    optToggle.checked = optimized;
+    // Flipping the toggle updates the URL and reloads the page.
+    optToggle.addEventListener("change", () => {
+      params.set("optimized", optToggle.checked ? "1" : "0");
+      location.search = params.toString();
+    });
+  }
+  // Which series to plot: always the "na" languages, plus the tuned OR the
+  // stock variant of Go/C# depending on the toggle.
+  const showSeries = s => s.variant === "na" ||
+    (optimized ? s.variant === "tuned" : s.variant === "stock");
 
   const tooltip = document.getElementById("tooltip");
   const fmt = v => v >= 10000 ? Math.round(v / 1000) + "K" : Math.round(v).toLocaleString("en-US");
@@ -545,9 +578,11 @@ const DATA = __DATA__;
 
   for (const mode of Object.keys(DATA.modes)) {
     const M = DATA.modes[mode];
-    const stOf = s => ({ ...styleFor(s.lang), dash: s.dash });
-    const defsFor = key => M.series.map(s => ({ name: s.name, vals: s[key], st: stOf(s) }));
-    const langLegend = () => M.series.map(s => ({ name: s.name, key: keySVG(stOf(s), 26, 12) }));
+    // One variant per language (solid lines); the toggle picks tuned vs stock.
+    const shown = M.series.filter(showSeries);
+    const stOf = s => ({ ...styleFor(s.lang), dash: false });
+    const defsFor = key => shown.map(s => ({ name: s.name, vals: s[key], st: stOf(s) }));
+    const langLegend = () => shown.map(s => ({ name: s.name, key: keySVG(stOf(s), 26, 12) }));
 
     legendInto(`legend-tps-${mode}`, langLegend());
     bigChart({
@@ -556,7 +591,7 @@ const DATA = __DATA__;
       ariaLabel: `Transactions per second by worker count, ${mode} mode`,
     });
 
-    const cpuMax = Math.ceil(Math.max(...M.series.map(s => Math.max(...s.cli)), ...M.srvHi) / 2000) * 2000 || 2000;
+    const cpuMax = Math.ceil(Math.max(...shown.map(s => Math.max(...s.cli)), ...M.srvHi) / 2000) * 2000 || 2000;
     const bandKey = document.createElement("span");
     bandKey.style.cssText = "width:26px;height:10px;background:var(--band);opacity:.25;border-radius:2px;display:inline-block;";
     legendInto(`legend-cpu-${mode}`, langLegend().concat([{ name: "Server (mysqld), min–max", key: bandKey }]));
