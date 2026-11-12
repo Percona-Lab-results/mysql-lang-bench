@@ -185,21 +185,26 @@ def main():
         print("chromium not found - skipping PNG export", file=sys.stderr)
         return
     PNG_DIR.mkdir(exist_ok=True)
-    for sid in png_ids:
-        png = PNG_DIR / f"{sid}.png"
+
+    def shoot(png, url):
         cmd = [chromium, "--headless", "--disable-gpu", "--no-sandbox",
                "--hide-scrollbars", "--force-device-scale-factor=2",
-               f"--screenshot={png}", "--window-size=1280,780",
-               f"file://{OUT}#png-{sid}"]
+               f"--screenshot={png}", "--window-size=1280,780", url]
         try:
             r = subprocess.run(cmd, capture_output=True, text=True, timeout=120)
         except subprocess.TimeoutExpired:
-            print(f"png TIMEOUT for {sid}", file=sys.stderr)
-            continue
+            print(f"png TIMEOUT for {png.name}", file=sys.stderr)
+            return
         if png.exists():
             print(f"png: {png}")
         else:
-            print(f"png FAILED for {sid}: {r.stderr.strip()[-200:]}", file=sys.stderr)
+            print(f"png FAILED for {png.name}: {r.stderr.strip()[-200:]}", file=sys.stderr)
+
+    for sid in png_ids:
+        # default view: all languages, stock runtime
+        shoot(PNG_DIR / f"{sid}.png", f"file://{OUT}#png-{sid}")
+        # optimized view: Go and C# only, stock + optimized curves
+        shoot(PNG_DIR / f"{sid}-optimized.png", f"file://{OUT}?optimized=1#png-{sid}")
 
 
 HTML_TEMPLATE = r"""<!DOCTYPE html>
