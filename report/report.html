@@ -112,9 +112,9 @@
       client and server on the same 80-core host. Workers: 4&nbsp;&rarr;&nbsp;512.
       Work-based workload: every worker runs a fixed 10,000 transactions per rung.
       All languages run on stock runtime defaults. Enable <em>Show optimized
-      Go/C#</em> to overlay the tuned-runtime curves for those two languages
-      (Go <code>GOMAXPROCS=16 GOGC=800</code>; C# server GC) alongside their
-      stock curves, so the tuning gain is visible.</p>
+      Go/C#</em> to focus on Go and C# alone — each shown with its stock
+      (default) curve and its tuned-runtime curve (Go <code>GOMAXPROCS=16
+      GOGC=800</code>; C# server GC) — with the other languages removed.</p>
     </div>
     <div class="controls">
       <label class="toggle"><input type="checkbox" id="opt-toggle"> Show optimized Go/C#</label>
@@ -225,8 +225,12 @@ const DATA = {"modes":{"events":{"threads":[4,8,16,32,64,128,256,512],"series":[
       location.search = params.toString();
     });
   }
-  // na + stock always plotted; the tuned overlay only when the toggle is on.
-  const showSeries = s => s.variant !== "tuned" || showOptimized;
+  // Off: every language, stock curves only. On: focus on Go and C# alone,
+  // showing each one's stock (default) and optimized curves — all other
+  // languages are removed.
+  const showSeries = s => showOptimized
+    ? (s.lang === "go" || s.lang === "csharp")
+    : s.variant !== "tuned";
   // Label: plain by default; when the overlay is on, disambiguate the Go/C#
   // pair as "(stock)" vs "(optimized)".
   const labelOf = s => s.variant === "tuned" ? s.name + " (optimized)"
