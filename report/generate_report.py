@@ -26,8 +26,11 @@ def load():
             continue
         r["_run"] = f.stem
         r["_host"] = f.parent.name
-        latest[(r["mode"], r["lang"], r["threads"])] = r
-    return sorted(latest.values(), key=lambda r: (r["mode"], r["lang"], r["threads"]))
+        # Keep stock and tuned runs (Go/C#) as distinct rows.
+        variant = r.get("tuned")
+        r["_disp"] = r["lang"] + (" (stock)" if variant is False else "")
+        latest[(r["mode"], r["lang"], variant, r["threads"])] = r
+    return sorted(latest.values(), key=lambda r: (r["mode"], r["_disp"], r["threads"]))
 
 
 def main() -> None:
@@ -39,7 +42,7 @@ def main() -> None:
     for mode in sorted({r["mode"] for r in rows}):
         mrows = [r for r in rows if r["mode"] == mode]
         threads = sorted({r["threads"] for r in mrows})
-        langs = sorted({r["lang"] for r in mrows})
+        langs = sorted({r["_disp"] for r in mrows})
         dur = next((r["duration_s"] for r in mrows if r.get("duration_s")), 0)
         title = MODE_TITLE.get(mode, mode)
         if mode == "duration":
@@ -50,14 +53,14 @@ def main() -> None:
         print("|------|--------:|----:|----:|-------:|-------:|-------:|-------:|--------:|-----:|----------:|----------:|----------:|")
         for r in mrows:
             print(
-                f"| {r['lang']} | {r['threads']} | {r['tps']:,} | {r['qps']:,} "
+                f"| {r['_disp']} | {r['threads']} | {r['tps']:,} | {r['qps']:,} "
                 f"| {r['p50_us']:,} | {r['p95_us']:,} | {r['p99_us']:,} | {r['max_us']:,} "
                 f"| {r.get('retries', 0)} | {r['txns']:,} | {r['elapsed_s']} "
                 f"| {r.get('client_cpu_s', '-')} | {r.get('server_cpu_s', '-')} |"
             )
         by = defaultdict(dict)
         for r in mrows:
-            by[r["lang"]][r["threads"]] = r["tps"]
+            by[r["_disp"]][r["threads"]] = r["tps"]
         print("\n## TPS by thread count\n")
         print("| lang | " + " | ".join(str(t) for t in threads) + " |")
         print("|------|" + "---:|" * len(threads))
@@ -67,7 +70,7 @@ def main() -> None:
 
     # merged CSV
     csv_path = ROOT / "results" / "summary.csv"
-    cols = ["mode", "lang", "threads", "tps", "qps", "p50_us", "p95_us",
+    cols = ["mode", "lang", "tuned", "threads", "tps", "qps", "p50_us", "p95_us",
             "p99_us", "max_us", "retries", "errors", "txns", "elapsed_s",
             "client_cpu_s", "server_cpu_s", "run_wall_s", "duration_s",
             "driver", "driver_version", "runtime_version", "prepared",

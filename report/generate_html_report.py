@@ -38,22 +38,26 @@ def load_rows():
             continue
         if "threads" not in r or "client_cpu_s" not in r or "mode" not in r:
             continue
-        latest[(r["mode"], r["lang"], r["threads"])] = r
+        # variant: True (tuned runtime), False (stock runtime), or None (n/a).
+        # Go and C# carry both a stock and a tuned run; keep them as separate
+        # series so the before/after of the runtime tuning is visible.
+        variant = r.get("tuned")
+        latest[(r["mode"], r["lang"], variant, r["threads"])] = r
     return latest
 
 
 def build_mode(latest, mode):
-    threads = sorted({t for (m, _, t) in latest if m == mode})
-    langs = sorted({l for (m, l, _) in latest if m == mode})
-    if not threads or not langs:
+    threads = sorted({t for (m, _, _, t) in latest if m == mode})
+    groups = sorted({(l, v) for (m, l, v, _) in latest if m == mode})
+    if not threads or not groups:
         return None
     series = []
     dur = 0
-    for lang in langs:
+    for lang, variant in groups:
         tps, cli, srv = [], [], []
         drv = ""
         for t in threads:
-            r = latest.get((mode, lang, t))
+            r = latest.get((mode, lang, variant, t))
             if r is None:
                 tps.append(None); cli.append(None); srv.append(None)
                 continue
@@ -63,8 +67,11 @@ def build_mode(latest, mode):
             drv = f'{r.get("driver", "")} {r.get("driver_version", "")}'.strip()
             dur = r.get("duration_s", 0) or dur
         if any(v is not None for v in tps):
+            stock = variant is False
             series.append({
-                "lang": lang, "name": DISPLAY.get(lang, lang), "driver": drv,
+                "lang": lang,
+                "name": DISPLAY.get(lang, lang) + (" (stock)" if stock else ""),
+                "driver": drv, "dash": stock,
                 "tps": tps, "cli": cli, "srv": srv,
                 "peak": max(v for v in tps if v is not None),
             })
@@ -114,7 +121,7 @@ def main():
         ("Peak throughput", f"{best['peak']:,.0f} tps", f"{best['name']} at {peak_t} threads"),
         ("Cheapest client", f"{cheap_v:,} µs/txn", f"{cheapest['name']}, CPU per transaction"),
         ("Costliest client", f"{dear_v:,} µs/txn", f"{dearest['name']}"),
-        ("Languages", str(len(pm["series"])), "same workload, same server, per-language data load"),
+        ("Languages", str(len({s["lang"] for s in pm["series"]})), "same workload, same server, per-language data load"),
     ]
     kpi_html = "\n".join(
         f'<div class="tile"><div class="tile-label">{l}</div>'
@@ -296,8 +303,10 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
       one language per pristine data load, 15-minute read-only sysbench warm-up before each sweep,
       client and server on the same 80-core host. Workers: 4&nbsp;&rarr;&nbsp;512.
       Work-based workload: every worker runs a fixed 10,000 transactions per rung.
-      Go and C# use tuned runtime settings (Go <code>GOMAXPROCS=16 GOGC=800</code>;
-      C# server GC); the other languages run on stock runtime defaults.</p>
+      Go and C# appear twice — a solid line for tuned runtime settings
+      (Go <code>GOMAXPROCS=16 GOGC=800</code>; C# server GC) and a dashed
+      <em>(stock)</em> line for the stock runtime defaults, so the tuning gain is
+      visible. The other languages run on stock defaults.</p>
     </div>
     <button id="theme-toggle" type="button">Toggle dark mode</button>
   </header>
@@ -389,7 +398,9 @@ const DATA = __DATA__;
 
   function keySVG(st, w, h) {
     const svg = el("svg", { width: w, height: h, viewBox: `0 0 ${w} ${h}`, "aria-hidden": "true" });
-    svg.appendChild(el("line", { x1: 1, x2: w - 1, y1: h / 2, y2: h / 2, stroke: st.color, "stroke-width": 2, "stroke-linecap": "round" }));
+    const ln = el("line", { x1: 1, x2: w - 1, y1: h / 2, y2: h / 2, stroke: st.color, "stroke-width": 2, "stroke-linecap": "round" });
+    if (st.dash) ln.setAttribute("stroke-dasharray", "5 4");
+    svg.appendChild(ln);
     svg.appendChild(shapeNode(st.shape, w / 2, h / 2, st.color, "var(--surface-1)"));
     return svg;
   }
@@ -443,7 +454,9 @@ const DATA = __DATA__;
     const lastIdxOf = vals => { for (let i = N - 1; i >= 0; i--) if (vals[i] != null) return i; return N - 1; };
     for (let si = cfg.seriesDefs.length - 1; si >= 0; si--) {
       const d = cfg.seriesDefs[si];
-      svg.appendChild(el("path", { d: path(d.vals), fill: "none", stroke: d.st.color, "stroke-width": 2, "stroke-linejoin": "round", "stroke-linecap": "round" }));
+      const lp = el("path", { d: path(d.vals), fill: "none", stroke: d.st.color, "stroke-width": 2, "stroke-linejoin": "round", "stroke-linecap": "round" });
+      if (d.st.dash) lp.setAttribute("stroke-dasharray", "7 5");
+      svg.appendChild(lp);
       for (let i = 0; i < N; i++) {
         if (d.vals[i] == null) continue;
         svg.appendChild(shapeNode(d.st.shape, X(i), Y(d.vals[i]), d.st.color, "var(--surface-1)"));
@@ -532,8 +545,9 @@ const DATA = __DATA__;
 
   for (const mode of Object.keys(DATA.modes)) {
     const M = DATA.modes[mode];
-    const defsFor = key => M.series.map(s => ({ name: s.name, vals: s[key], st: styleFor(s.lang) }));
-    const langLegend = () => M.series.map(s => ({ name: s.name, key: keySVG(styleFor(s.lang), 26, 12) }));
+    const stOf = s => ({ ...styleFor(s.lang), dash: s.dash });
+    const defsFor = key => M.series.map(s => ({ name: s.name, vals: s[key], st: stOf(s) }));
+    const langLegend = () => M.series.map(s => ({ name: s.name, key: keySVG(stOf(s), 26, 12) }));
 
     legendInto(`legend-tps-${mode}`, langLegend());
     bigChart({
