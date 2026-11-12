@@ -94,7 +94,7 @@ def table(series, threads, key, fmt):
 def main():
     latest = load_rows()
     modes = {}
-    for mode in ("events", "duration"):
+    for mode in ("events",):  # work-based only; fixed-duration dropped
         m = build_mode(latest, mode)
         if m:
             modes[mode] = m
@@ -295,7 +295,9 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
       4 range selects, 2 updates, delete+insert per txn), 10&nbsp;M-row table, Percona Server 8.4.11,
       one language per pristine data load, 15-minute read-only sysbench warm-up before each sweep,
       client and server on the same 80-core host. Workers: 4&nbsp;&rarr;&nbsp;512.
-      Work-based and fixed-duration modes are presented separately.</p>
+      Work-based workload: every worker runs a fixed 10,000 transactions per rung.
+      Go and C# use tuned runtime settings (Go <code>GOMAXPROCS=16 GOGC=800</code>;
+      C# server GC); the other languages run on stock runtime defaults.</p>
     </div>
     <button id="theme-toggle" type="button">Toggle dark mode</button>
   </header>
@@ -533,11 +535,10 @@ const DATA = __DATA__;
     const defsFor = key => M.series.map(s => ({ name: s.name, vals: s[key], st: styleFor(s.lang) }));
     const langLegend = () => M.series.map(s => ({ name: s.name, key: keySVG(styleFor(s.lang), 26, 12) }));
 
-    const tpsMax = Math.ceil(Math.max(...M.series.map(s => Math.max(...s.tps))) / 10000) * 10000 || 10000;
     legendInto(`legend-tps-${mode}`, langLegend());
     bigChart({
       hostId: `chart-tps-${mode}`, T: M.threads, seriesDefs: defsFor("tps"),
-      yMax: tpsMax, yStep: tpsMax >= 20000 ? 5000 : 2000, unit: "tps", band: null,
+      yMax: 30000, yStep: 5000, unit: "tps", band: null,
       ariaLabel: `Transactions per second by worker count, ${mode} mode`,
     });
 

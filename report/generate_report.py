@@ -31,9 +31,9 @@ def load():
 
 
 def main() -> None:
-    rows = load()
+    rows = [r for r in load() if r["mode"] == "events"]  # work-based only
     if not rows:
-        print("no mode-tagged results found under results/*/", file=sys.stderr)
+        print("no work-based results found under results/*/", file=sys.stderr)
         sys.exit(1)
 
     for mode in sorted({r["mode"] for r in rows}):

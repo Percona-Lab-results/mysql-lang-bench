@@ -1209,3 +1209,4 @@ Unknown MySQL ssl_mode flag: 1
 Unknown MySQL ssl_mode flag: 1
 Unknown MySQL ssl_mode flag: 1
 Unknown MySQL ssl_mode flag: 1
+ruby t=512 ok
