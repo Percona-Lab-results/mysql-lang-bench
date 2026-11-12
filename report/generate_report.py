@@ -28,7 +28,8 @@ def load():
         r["_host"] = f.parent.name
         # Keep stock and tuned runs (Go/C#) as distinct rows.
         variant = r.get("tuned")
-        r["_disp"] = r["lang"] + (" (stock)" if variant is False else "")
+        r["_disp"] = r["lang"] + (" (optimized)" if variant is True else
+                                  " (stock)" if variant is False else "")
         latest[(r["mode"], r["lang"], variant, r["threads"])] = r
     return sorted(latest.values(), key=lambda r: (r["mode"], r["_disp"], r["threads"]))
 

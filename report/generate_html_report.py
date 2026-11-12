@@ -67,13 +67,13 @@ def build_mode(latest, mode):
             drv = f'{r.get("driver", "")} {r.get("driver_version", "")}'.strip()
             dur = r.get("duration_s", 0) or dur
         if any(v is not None for v in tps):
-            stock = variant is False
             series.append({
                 "lang": lang,
-                "name": DISPLAY.get(lang, lang) + (" (stock)" if stock else ""),
+                "name": DISPLAY.get(lang, lang),  # base name; JS adds a suffix
                 "driver": drv,
-                # variant drives the optimized/stock toggle: "na" always shown,
-                # "tuned"/"stock" shown depending on the toggle (Go and C#).
+                # variant drives the optimized toggle: "na" and "stock" always
+                # plotted; "tuned" (the optimized Go/C# overlay) only when the
+                # toggle is on. Off by default.
                 "variant": "stock" if variant is False else ("tuned" if variant is True else "na"),
                 "tps": tps, "cli": cli, "srv": srv,
                 "peak": max(v for v in tps if v is not None),
@@ -115,7 +115,7 @@ def main():
     # KPI row from the primary mode (events if present), optimized view
     # (tuned Go/C# + the others) — the default the page loads with.
     pm = modes.get("events") or next(iter(modes.values()))
-    view = [s for s in pm["series"] if s["variant"] in ("na", "tuned")]
+    view = [s for s in pm["series"] if s["variant"] in ("na", "stock")]
     best = view[0]
     peak_t = pm["threads"][best["tps"].index(best["peak"])]
     cheapest = min(view, key=lambda s: min(v for v in s["cli"] if v is not None))
@@ -315,13 +315,13 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
       one language per pristine data load, 15-minute read-only sysbench warm-up before each sweep,
       client and server on the same 80-core host. Workers: 4&nbsp;&rarr;&nbsp;512.
       Work-based workload: every worker runs a fixed 10,000 transactions per rung.
-      Use the <em>Optimized Go/C#</em> toggle to plot either the tuned runtime
-      settings (Go <code>GOMAXPROCS=16 GOGC=800</code>; C# server GC) or the
-      stock runtime defaults for those two languages. The other languages always
-      run on stock defaults.</p>
+      All languages run on stock runtime defaults. Enable <em>Show optimized
+      Go/C#</em> to overlay the tuned-runtime curves for those two languages
+      (Go <code>GOMAXPROCS=16 GOGC=800</code>; C# server GC) alongside their
+      stock curves, so the tuning gain is visible.</p>
     </div>
     <div class="controls">
-      <label class="toggle"><input type="checkbox" id="opt-toggle"> Optimized Go/C#</label>
+      <label class="toggle"><input type="checkbox" id="opt-toggle"> Show optimized Go/C#</label>
       <button id="theme-toggle" type="button">Toggle dark mode</button>
     </div>
   </header>
@@ -353,23 +353,27 @@ const DATA = __DATA__;
     if (sec) sec.classList.add("png-show");
   }
 
-  // Optimized Go/C# toggle, driven by ?optimized=0|1 (default 1 = tuned).
-  // The graphs plot the tuned variant when on, the stock variant when off.
+  // "Show optimized Go/C#" toggle, driven by ?optimized=0|1 (default 0 = off).
+  // Off: every language shows its stock curve. On: the tuned Go/C# curves are
+  // overlaid alongside their stock curves (both kept, not swapped).
   const params = new URLSearchParams(location.search);
-  const optimized = params.get("optimized") !== "0";
+  const showOptimized = params.get("optimized") === "1";
   const optToggle = document.getElementById("opt-toggle");
   if (optToggle) {
-    optToggle.checked = optimized;
+    optToggle.checked = showOptimized;
     // Flipping the toggle updates the URL and reloads the page.
     optToggle.addEventListener("change", () => {
       params.set("optimized", optToggle.checked ? "1" : "0");
       location.search = params.toString();
     });
   }
-  // Which series to plot: always the "na" languages, plus the tuned OR the
-  // stock variant of Go/C# depending on the toggle.
-  const showSeries = s => s.variant === "na" ||
-    (optimized ? s.variant === "tuned" : s.variant === "stock");
+  // na + stock always plotted; the tuned overlay only when the toggle is on.
+  const showSeries = s => s.variant !== "tuned" || showOptimized;
+  // Label: plain by default; when the overlay is on, disambiguate the Go/C#
+  // pair as "(stock)" vs "(optimized)".
+  const labelOf = s => s.variant === "tuned" ? s.name + " (optimized)"
+    : (s.variant === "stock" && showOptimized) ? s.name + " (stock)" : s.name;
+  const dashOf = s => s.variant === "tuned";  // optimized overlay = dashed
 
   const tooltip = document.getElementById("tooltip");
   const fmt = v => v >= 10000 ? Math.round(v / 1000) + "K" : Math.round(v).toLocaleString("en-US");
@@ -578,11 +582,11 @@ const DATA = __DATA__;
 
   for (const mode of Object.keys(DATA.modes)) {
     const M = DATA.modes[mode];
-    // One variant per language (solid lines); the toggle picks tuned vs stock.
+    // Stock curves (solid) always; the optimized Go/C# overlay (dashed) when on.
     const shown = M.series.filter(showSeries);
-    const stOf = s => ({ ...styleFor(s.lang), dash: false });
-    const defsFor = key => shown.map(s => ({ name: s.name, vals: s[key], st: stOf(s) }));
-    const langLegend = () => shown.map(s => ({ name: s.name, key: keySVG(stOf(s), 26, 12) }));
+    const stOf = s => ({ ...styleFor(s.lang), dash: dashOf(s) });
+    const defsFor = key => shown.map(s => ({ name: labelOf(s), vals: s[key], st: stOf(s) }));
+    const langLegend = () => shown.map(s => ({ name: labelOf(s), key: keySVG(stOf(s), 26, 12) }));
 
     legendInto(`legend-tps-${mode}`, langLegend());
     bigChart({
