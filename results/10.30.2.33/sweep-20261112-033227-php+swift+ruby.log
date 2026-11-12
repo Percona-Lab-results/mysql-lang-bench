@@ -1,0 +1,1211 @@
+Table	Op	Msg_type	Msg_text
+bench.sbtest	analyze	status	OK
+table reloaded: 10000000 rows
+sysbench 1.0.20 (using system LuaJIT 2.1.0-beta3)
+
+Running the test with following options:
+Number of threads: 32
+Report intermediate results every 60 second(s)
+Initializing random number generator from current time
+
+
+Initializing worker threads...
+
+Threads started!
+
+[ 60s ] thds: 32 tps: 21267.82 qps: 233948.86 (r/w/o: 233948.86/0.00/0.00) lat (ms,95%): 1.73 err/s: 0.00 reconn/s: 0.00
+[ 120s ] thds: 32 tps: 21329.38 qps: 234623.38 (r/w/o: 234623.38/0.00/0.00) lat (ms,95%): 1.73 err/s: 0.00 reconn/s: 0.00
+[ 180s ] thds: 32 tps: 21295.03 qps: 234245.43 (r/w/o: 234245.43/0.00/0.00) lat (ms,95%): 1.73 err/s: 0.00 reconn/s: 0.00
+[ 240s ] thds: 32 tps: 21281.45 qps: 234096.27 (r/w/o: 234096.27/0.00/0.00) lat (ms,95%): 1.73 err/s: 0.00 reconn/s: 0.00
+[ 300s ] thds: 32 tps: 21325.24 qps: 234577.84 (r/w/o: 234577.84/0.00/0.00) lat (ms,95%): 1.73 err/s: 0.00 reconn/s: 0.00
+[ 360s ] thds: 32 tps: 21343.08 qps: 234773.25 (r/w/o: 234773.25/0.00/0.00) lat (ms,95%): 1.73 err/s: 0.00 reconn/s: 0.00
+[ 420s ] thds: 32 tps: 21352.18 qps: 234873.83 (r/w/o: 234873.83/0.00/0.00) lat (ms,95%): 1.73 err/s: 0.00 reconn/s: 0.00
+[ 480s ] thds: 32 tps: 21316.67 qps: 234483.43 (r/w/o: 234483.43/0.00/0.00) lat (ms,95%): 1.73 err/s: 0.00 reconn/s: 0.00
+[ 540s ] thds: 32 tps: 21350.20 qps: 234852.81 (r/w/o: 234852.81/0.00/0.00) lat (ms,95%): 1.73 err/s: 0.00 reconn/s: 0.00
+[ 600s ] thds: 32 tps: 21372.27 qps: 235094.75 (r/w/o: 235094.75/0.00/0.00) lat (ms,95%): 1.73 err/s: 0.00 reconn/s: 0.00
+[ 660s ] thds: 32 tps: 21311.99 qps: 234431.65 (r/w/o: 234431.65/0.00/0.00) lat (ms,95%): 1.73 err/s: 0.00 reconn/s: 0.00
+[ 720s ] thds: 32 tps: 21309.40 qps: 234403.58 (r/w/o: 234403.58/0.00/0.00) lat (ms,95%): 1.73 err/s: 0.00 reconn/s: 0.00
+[ 780s ] thds: 32 tps: 21399.08 qps: 235390.17 (r/w/o: 235390.17/0.00/0.00) lat (ms,95%): 1.73 err/s: 0.00 reconn/s: 0.00
+[ 840s ] thds: 32 tps: 21360.89 qps: 234969.32 (r/w/o: 234969.32/0.00/0.00) lat (ms,95%): 1.73 err/s: 0.00 reconn/s: 0.00
+[ 900s ] thds: 32 tps: 21324.88 qps: 234573.71 (r/w/o: 234573.71/0.00/0.00) lat (ms,95%): 1.73 err/s: 0.00 reconn/s: 0.00
+SQL statistics:
+    queries performed:
+        read:                            211160928
+        write:                           0
+        other:                           0
+        total:                           211160928
+    transactions:                        19196448 (21329.04 per sec.)
+    queries:                             211160928 (234619.42 per sec.)
+    ignored errors:                      0      (0.00 per sec.)
+    reconnects:                          0      (0.00 per sec.)
+
+General statistics:
+    total time:                          900.0129s
+    total number of events:              19196448
+
+Latency (ms):
+         min:                                    1.17
+         avg:                                    1.50
+         max:                                    4.06
+         95th percentile:                        1.73
+         sum:                             28773425.49
+
+Threads fairness:
+    events (avg/stddev):           599889.0000/3336.09
+    execution time (avg/stddev):   899.1695/0.01
+
+php t=4 ok
+php t=8 ok
+php t=16 ok
+php t=32 ok
+php t=64 ok
+php t=128 ok
+php t=256 ok
+php t=512 ok
+Table	Op	Msg_type	Msg_text
+bench.sbtest	analyze	status	OK
+table reloaded: 10000000 rows
+sysbench 1.0.20 (using system LuaJIT 2.1.0-beta3)
+
+Running the test with following options:
+Number of threads: 32
+Report intermediate results every 60 second(s)
+Initializing random number generator from current time
+
+
+Initializing worker threads...
+
+Threads started!
+
+[ 60s ] thds: 32 tps: 21245.70 qps: 233705.87 (r/w/o: 233705.87/0.00/0.00) lat (ms,95%): 1.73 err/s: 0.00 reconn/s: 0.00
+[ 120s ] thds: 32 tps: 21283.22 qps: 234115.45 (r/w/o: 234115.45/0.00/0.00) lat (ms,95%): 1.73 err/s: 0.00 reconn/s: 0.00
+[ 180s ] thds: 32 tps: 21345.61 qps: 234802.15 (r/w/o: 234802.15/0.00/0.00) lat (ms,95%): 1.73 err/s: 0.00 reconn/s: 0.00
+[ 240s ] thds: 32 tps: 21292.99 qps: 234222.25 (r/w/o: 234222.25/0.00/0.00) lat (ms,95%): 1.73 err/s: 0.00 reconn/s: 0.00
+[ 300s ] thds: 32 tps: 21304.29 qps: 234347.72 (r/w/o: 234347.72/0.00/0.00) lat (ms,95%): 1.73 err/s: 0.00 reconn/s: 0.00
+[ 360s ] thds: 32 tps: 21377.63 qps: 235153.40 (r/w/o: 235153.40/0.00/0.00) lat (ms,95%): 1.73 err/s: 0.00 reconn/s: 0.00
+[ 420s ] thds: 32 tps: 21340.96 qps: 234751.45 (r/w/o: 234751.45/0.00/0.00) lat (ms,95%): 1.73 err/s: 0.00 reconn/s: 0.00
+[ 480s ] thds: 32 tps: 21325.61 qps: 234580.91 (r/w/o: 234580.91/0.00/0.00) lat (ms,95%): 1.73 err/s: 0.00 reconn/s: 0.00
+[ 540s ] thds: 32 tps: 21338.99 qps: 234728.80 (r/w/o: 234728.80/0.00/0.00) lat (ms,95%): 1.73 err/s: 0.00 reconn/s: 0.00
+[ 600s ] thds: 32 tps: 21352.35 qps: 234875.80 (r/w/o: 234875.80/0.00/0.00) lat (ms,95%): 1.73 err/s: 0.00 reconn/s: 0.00
+[ 660s ] thds: 32 tps: 21335.00 qps: 234684.74 (r/w/o: 234684.74/0.00/0.00) lat (ms,95%): 1.73 err/s: 0.00 reconn/s: 0.00
+[ 720s ] thds: 32 tps: 21360.79 qps: 234969.34 (r/w/o: 234969.34/0.00/0.00) lat (ms,95%): 1.73 err/s: 0.00 reconn/s: 0.00
+[ 780s ] thds: 32 tps: 21378.87 qps: 235167.39 (r/w/o: 235167.39/0.00/0.00) lat (ms,95%): 1.73 err/s: 0.00 reconn/s: 0.00
+[ 840s ] thds: 32 tps: 21401.32 qps: 235414.45 (r/w/o: 235414.45/0.00/0.00) lat (ms,95%): 1.73 err/s: 0.00 reconn/s: 0.00
+[ 900s ] thds: 32 tps: 21354.02 qps: 234894.38 (r/w/o: 234894.38/0.00/0.00) lat (ms,95%): 1.73 err/s: 0.00 reconn/s: 0.00
+SQL statistics:
+    queries performed:
+        read:                            211225454
+        write:                           0
+        other:                           0
+        total:                           211225454
+    transactions:                        19202314 (21335.52 per sec.)
+    queries:                             211225454 (234690.71 per sec.)
+    ignored errors:                      0      (0.00 per sec.)
+    reconnects:                          0      (0.00 per sec.)
+
+General statistics:
+    total time:                          900.0145s
+    total number of events:              19202314
+
+Latency (ms):
+         min:                                    1.12
+         avg:                                    1.50
+         max:                                    6.38
+         95th percentile:                        1.73
+         sum:                             28773764.02
+
+Threads fairness:
+    events (avg/stddev):           600072.3125/2841.49
+    execution time (avg/stddev):   899.1801/0.01
+
+swift t=4 ok
+swift t=8 ok
+swift t=16 ok
+swift t=32 ok
+swift t=64 ok
+swift t=128 ok
+swift t=256 ok
+swift t=512 ok
+Table	Op	Msg_type	Msg_text
+bench.sbtest	analyze	status	OK
+table reloaded: 10000000 rows
+sysbench 1.0.20 (using system LuaJIT 2.1.0-beta3)
+
+Running the test with following options:
+Number of threads: 32
+Report intermediate results every 60 second(s)
+Initializing random number generator from current time
+
+
+Initializing worker threads...
+
+Threads started!
+
+[ 60s ] thds: 32 tps: 21151.03 qps: 232664.73 (r/w/o: 232664.73/0.00/0.00) lat (ms,95%): 1.73 err/s: 0.00 reconn/s: 0.00
+[ 120s ] thds: 32 tps: 21262.06 qps: 233881.67 (r/w/o: 233881.67/0.00/0.00) lat (ms,95%): 1.73 err/s: 0.00 reconn/s: 0.00
+[ 180s ] thds: 32 tps: 21250.34 qps: 233754.41 (r/w/o: 233754.41/0.00/0.00) lat (ms,95%): 1.73 err/s: 0.00 reconn/s: 0.00
+[ 240s ] thds: 32 tps: 21238.75 qps: 233626.00 (r/w/o: 233626.00/0.00/0.00) lat (ms,95%): 1.73 err/s: 0.00 reconn/s: 0.00
+[ 300s ] thds: 32 tps: 21313.21 qps: 234445.70 (r/w/o: 234445.70/0.00/0.00) lat (ms,95%): 1.73 err/s: 0.00 reconn/s: 0.00
+[ 360s ] thds: 32 tps: 21311.54 qps: 234427.33 (r/w/o: 234427.33/0.00/0.00) lat (ms,95%): 1.73 err/s: 0.00 reconn/s: 0.00
+[ 420s ] thds: 32 tps: 21290.24 qps: 234191.93 (r/w/o: 234191.93/0.00/0.00) lat (ms,95%): 1.73 err/s: 0.00 reconn/s: 0.00
+[ 480s ] thds: 32 tps: 21270.48 qps: 233975.25 (r/w/o: 233975.25/0.00/0.00) lat (ms,95%): 1.73 err/s: 0.00 reconn/s: 0.00
+[ 540s ] thds: 32 tps: 21266.04 qps: 233926.81 (r/w/o: 233926.81/0.00/0.00) lat (ms,95%): 1.73 err/s: 0.00 reconn/s: 0.00
+[ 600s ] thds: 32 tps: 21235.49 qps: 233590.01 (r/w/o: 233590.01/0.00/0.00) lat (ms,95%): 1.73 err/s: 0.00 reconn/s: 0.00
+[ 660s ] thds: 32 tps: 21249.34 qps: 233743.18 (r/w/o: 233743.18/0.00/0.00) lat (ms,95%): 1.73 err/s: 0.00 reconn/s: 0.00
+[ 720s ] thds: 32 tps: 21267.43 qps: 233941.23 (r/w/o: 233941.23/0.00/0.00) lat (ms,95%): 1.73 err/s: 0.00 reconn/s: 0.00
+[ 780s ] thds: 32 tps: 21283.03 qps: 234112.99 (r/w/o: 234112.99/0.00/0.00) lat (ms,95%): 1.73 err/s: 0.00 reconn/s: 0.00
+[ 840s ] thds: 32 tps: 21255.17 qps: 233807.95 (r/w/o: 233807.95/0.00/0.00) lat (ms,95%): 1.73 err/s: 0.00 reconn/s: 0.00
+[ 900s ] thds: 32 tps: 21319.40 qps: 234512.94 (r/w/o: 234512.94/0.00/0.00) lat (ms,95%): 1.73 err/s: 0.00 reconn/s: 0.00
+SQL statistics:
+    queries performed:
+        read:                            210516735
+        write:                           0
+        other:                           0
+        total:                           210516735
+    transactions:                        19137885 (21263.95 per sec.)
+    queries:                             210516735 (233903.44 per sec.)
+    ignored errors:                      0      (0.00 per sec.)
+    reconnects:                          0      (0.00 per sec.)
+
+General statistics:
+    total time:                          900.0137s
+    total number of events:              19137885
+
+Latency (ms):
+         min:                                    1.15
+         avg:                                    1.50
+         max:                                    5.57
+         95th percentile:                        1.73
+         sum:                             28774379.24
+
+Threads fairness:
+    events (avg/stddev):           598058.9062/3828.86
+    execution time (avg/stddev):   899.1994/0.02
+
+Unknown MySQL ssl_mode flag: 1
+Unknown MySQL ssl_mode flag: 1
+Unknown MySQL ssl_mode flag: 1
+Unknown MySQL ssl_mode flag: 1
+ruby t=4 ok
+Unknown MySQL ssl_mode flag: 1
+Unknown MySQL ssl_mode flag: 1
+Unknown MySQL ssl_mode flag: 1
+Unknown MySQL ssl_mode flag: 1
+Unknown MySQL ssl_mode flag: 1
+Unknown MySQL ssl_mode flag: 1
+Unknown MySQL ssl_mode flag: 1
+Unknown MySQL ssl_mode flag: 1
+ruby t=8 ok
+Unknown MySQL ssl_mode flag: 1
+Unknown MySQL ssl_mode flag: 1
+Unknown MySQL ssl_mode flag: 1
+Unknown MySQL ssl_mode flag: 1
+Unknown MySQL ssl_mode flag: 1
+Unknown MySQL ssl_mode flag: 1
+Unknown MySQL ssl_mode flag: 1
+Unknown MySQL ssl_mode flag: 1
+Unknown MySQL ssl_mode flag: 1
+Unknown MySQL ssl_mode flag: 1
+Unknown MySQL ssl_mode flag: 1
+Unknown MySQL ssl_mode flag: 1
+Unknown MySQL ssl_mode flag: 1
+Unknown MySQL ssl_mode flag: 1
+Unknown MySQL ssl_mode flag: 1
+Unknown MySQL ssl_mode flag: 1
+ruby t=16 ok
+Unknown MySQL ssl_mode flag: 1
+Unknown MySQL ssl_mode flag: 1
+Unknown MySQL ssl_mode flag: 1
+Unknown MySQL ssl_mode flag: 1
+Unknown MySQL ssl_mode flag: 1
+Unknown MySQL ssl_mode flag: 1
+Unknown MySQL ssl_mode flag: 1
+Unknown MySQL ssl_mode flag: 1
+Unknown MySQL ssl_mode flag: 1
+Unknown MySQL ssl_mode flag: 1
+Unknown MySQL ssl_mode flag: 1
+Unknown MySQL ssl_mode flag: 1
+Unknown MySQL ssl_mode flag: 1
+Unknown MySQL ssl_mode flag: 1
+Unknown MySQL ssl_mode flag: 1
+Unknown MySQL ssl_mode flag: 1
+Unknown MySQL ssl_mode flag: 1
+Unknown MySQL ssl_mode flag: 1
+Unknown MySQL ssl_mode flag: 1
+Unknown MySQL ssl_mode flag: 1
+Unknown MySQL ssl_mode flag: 1
+Unknown MySQL ssl_mode flag: 1
+Unknown MySQL ssl_mode flag: 1
+Unknown MySQL ssl_mode flag: 1
+Unknown MySQL ssl_mode flag: 1
+Unknown MySQL ssl_mode flag: 1
+Unknown MySQL ssl_mode flag: 1
+Unknown MySQL ssl_mode flag: 1
+Unknown MySQL ssl_mode flag: 1
+Unknown MySQL ssl_mode flag: 1
+Unknown MySQL ssl_mode flag: 1
+Unknown MySQL ssl_mode flag: 1
+ruby t=32 ok
+Unknown MySQL ssl_mode flag: 1
+Unknown MySQL ssl_mode flag: 1
+Unknown MySQL ssl_mode flag: 1
+Unknown MySQL ssl_mode flag: 1
+Unknown MySQL ssl_mode flag: 1
+Unknown MySQL ssl_mode flag: 1
+Unknown MySQL ssl_mode flag: 1
+Unknown MySQL ssl_mode flag: 1
+Unknown MySQL ssl_mode flag: 1
+Unknown MySQL ssl_mode flag: 1
+Unknown MySQL ssl_mode flag: 1
+Unknown MySQL ssl_mode flag: 1
+Unknown MySQL ssl_mode flag: 1
+Unknown MySQL ssl_mode flag: 1
+Unknown MySQL ssl_mode flag: 1
+Unknown MySQL ssl_mode flag: 1
+Unknown MySQL ssl_mode flag: 1
+Unknown MySQL ssl_mode flag: 1
+Unknown MySQL ssl_mode flag: 1
+Unknown MySQL ssl_mode flag: 1
+Unknown MySQL ssl_mode flag: 1
+Unknown MySQL ssl_mode flag: 1
+Unknown MySQL ssl_mode flag: 1
+Unknown MySQL ssl_mode flag: 1
+Unknown MySQL ssl_mode flag: 1
+Unknown MySQL ssl_mode flag: 1
+Unknown MySQL ssl_mode flag: 1
+Unknown MySQL ssl_mode flag: 1
+Unknown MySQL ssl_mode flag: 1
+Unknown MySQL ssl_mode flag: 1
+Unknown MySQL ssl_mode flag: 1
+Unknown MySQL ssl_mode flag: 1
+Unknown MySQL ssl_mode flag: 1
+Unknown MySQL ssl_mode flag: 1
+Unknown MySQL ssl_mode flag: 1
+Unknown MySQL ssl_mode flag: 1
+Unknown MySQL ssl_mode flag: 1
+Unknown MySQL ssl_mode flag: 1
+Unknown MySQL ssl_mode flag: 1
+Unknown MySQL ssl_mode flag: 1
+Unknown MySQL ssl_mode flag: 1
+Unknown MySQL ssl_mode flag: 1
+Unknown MySQL ssl_mode flag: 1
+Unknown MySQL ssl_mode flag: 1
+Unknown MySQL ssl_mode flag: 1
+Unknown MySQL ssl_mode flag: 1
+Unknown MySQL ssl_mode flag: 1
+Unknown MySQL ssl_mode flag: 1
+Unknown MySQL ssl_mode flag: 1
+Unknown MySQL ssl_mode flag: 1
+Unknown MySQL ssl_mode flag: 1
+Unknown MySQL ssl_mode flag: 1
+Unknown MySQL ssl_mode flag: 1
+Unknown MySQL ssl_mode flag: 1
+Unknown MySQL ssl_mode flag: 1
+Unknown MySQL ssl_mode flag: 1
+Unknown MySQL ssl_mode flag: 1
+Unknown MySQL ssl_mode flag: 1
+Unknown MySQL ssl_mode flag: 1
+Unknown MySQL ssl_mode flag: 1
+Unknown MySQL ssl_mode flag: 1
+Unknown MySQL ssl_mode flag: 1
+Unknown MySQL ssl_mode flag: 1
+Unknown MySQL ssl_mode flag: 1
+ruby t=64 ok
+Unknown MySQL ssl_mode flag: 1
+Unknown MySQL ssl_mode flag: 1
+Unknown MySQL ssl_mode flag: 1
+Unknown MySQL ssl_mode flag: 1
+Unknown MySQL ssl_mode flag: 1
+Unknown MySQL ssl_mode flag: 1
+Unknown MySQL ssl_mode flag: 1
+Unknown MySQL ssl_mode flag: 1
+Unknown MySQL ssl_mode flag: 1
+Unknown MySQL ssl_mode flag: 1
+Unknown MySQL ssl_mode flag: 1
+Unknown MySQL ssl_mode flag: 1
+Unknown MySQL ssl_mode flag: 1
+Unknown MySQL ssl_mode flag: 1
+Unknown MySQL ssl_mode flag: 1
+Unknown MySQL ssl_mode flag: 1
+Unknown MySQL ssl_mode flag: 1
+Unknown MySQL ssl_mode flag: 1
+Unknown MySQL ssl_mode flag: 1
+Unknown MySQL ssl_mode flag: 1
+Unknown MySQL ssl_mode flag: 1
+Unknown MySQL ssl_mode flag: 1
+Unknown MySQL ssl_mode flag: 1
+Unknown MySQL ssl_mode flag: 1
+Unknown MySQL ssl_mode flag: 1
+Unknown MySQL ssl_mode flag: 1
+Unknown MySQL ssl_mode flag: 1
+Unknown MySQL ssl_mode flag: 1
+Unknown MySQL ssl_mode flag: 1
+Unknown MySQL ssl_mode flag: 1
+Unknown MySQL ssl_mode flag: 1
+Unknown MySQL ssl_mode flag: 1
+Unknown MySQL ssl_mode flag: 1
+Unknown MySQL ssl_mode flag: 1
+Unknown MySQL ssl_mode flag: 1
+Unknown MySQL ssl_mode flag: 1
+Unknown MySQL ssl_mode flag: 1
+Unknown MySQL ssl_mode flag: 1
+Unknown MySQL ssl_mode flag: 1
+Unknown MySQL ssl_mode flag: 1
+Unknown MySQL ssl_mode flag: 1
+Unknown MySQL ssl_mode flag: 1
+Unknown MySQL ssl_mode flag: 1
+Unknown MySQL ssl_mode flag: 1
+Unknown MySQL ssl_mode flag: 1
+Unknown MySQL ssl_mode flag: 1
+Unknown MySQL ssl_mode flag: 1
+Unknown MySQL ssl_mode flag: 1
+Unknown MySQL ssl_mode flag: 1
+Unknown MySQL ssl_mode flag: 1
+Unknown MySQL ssl_mode flag: 1
+Unknown MySQL ssl_mode flag: 1
+Unknown MySQL ssl_mode flag: 1
+Unknown MySQL ssl_mode flag: 1
+Unknown MySQL ssl_mode flag: 1
+Unknown MySQL ssl_mode flag: 1
+Unknown MySQL ssl_mode flag: 1
+Unknown MySQL ssl_mode flag: 1
+Unknown MySQL ssl_mode flag: 1
+Unknown MySQL ssl_mode flag: 1
+Unknown MySQL ssl_mode flag: 1
+Unknown MySQL ssl_mode flag: 1
+Unknown MySQL ssl_mode flag: 1
+Unknown MySQL ssl_mode flag: 1
+Unknown MySQL ssl_mode flag: 1
+Unknown MySQL ssl_mode flag: 1
+Unknown MySQL ssl_mode flag: 1
+Unknown MySQL ssl_mode flag: 1
+Unknown MySQL ssl_mode flag: 1
+Unknown MySQL ssl_mode flag: 1
+Unknown MySQL ssl_mode flag: 1
+Unknown MySQL ssl_mode flag: 1
+Unknown MySQL ssl_mode flag: 1
+Unknown MySQL ssl_mode flag: 1
+Unknown MySQL ssl_mode flag: 1
+Unknown MySQL ssl_mode flag: 1
+Unknown MySQL ssl_mode flag: 1
+Unknown MySQL ssl_mode flag: 1
+Unknown MySQL ssl_mode flag: 1
+Unknown MySQL ssl_mode flag: 1
+Unknown MySQL ssl_mode flag: 1
+Unknown MySQL ssl_mode flag: 1
+Unknown MySQL ssl_mode flag: 1
+Unknown MySQL ssl_mode flag: 1
+Unknown MySQL ssl_mode flag: 1
+Unknown MySQL ssl_mode flag: 1
+Unknown MySQL ssl_mode flag: 1
+Unknown MySQL ssl_mode flag: 1
+Unknown MySQL ssl_mode flag: 1
+Unknown MySQL ssl_mode flag: 1
+Unknown MySQL ssl_mode flag: 1
+Unknown MySQL ssl_mode flag: 1
+Unknown MySQL ssl_mode flag: 1
+Unknown MySQL ssl_mode flag: 1
+Unknown MySQL ssl_mode flag: 1
+Unknown MySQL ssl_mode flag: 1
+Unknown MySQL ssl_mode flag: 1
+Unknown MySQL ssl_mode flag: 1
+Unknown MySQL ssl_mode flag: 1
+Unknown MySQL ssl_mode flag: 1
+Unknown MySQL ssl_mode flag: 1
+Unknown MySQL ssl_mode flag: 1
+Unknown MySQL ssl_mode flag: 1
+Unknown MySQL ssl_mode flag: 1
+Unknown MySQL ssl_mode flag: 1
+Unknown MySQL ssl_mode flag: 1
+Unknown MySQL ssl_mode flag: 1
+Unknown MySQL ssl_mode flag: 1
+Unknown MySQL ssl_mode flag: 1
+Unknown MySQL ssl_mode flag: 1
+Unknown MySQL ssl_mode flag: 1
+Unknown MySQL ssl_mode flag: 1
+Unknown MySQL ssl_mode flag: 1
+Unknown MySQL ssl_mode flag: 1
+Unknown MySQL ssl_mode flag: 1
+Unknown MySQL ssl_mode flag: 1
+Unknown MySQL ssl_mode flag: 1
+Unknown MySQL ssl_mode flag: 1
+Unknown MySQL ssl_mode flag: 1
+Unknown MySQL ssl_mode flag: 1
+Unknown MySQL ssl_mode flag: 1
+Unknown MySQL ssl_mode flag: 1
+Unknown MySQL ssl_mode flag: 1
+Unknown MySQL ssl_mode flag: 1
+Unknown MySQL ssl_mode flag: 1
+Unknown MySQL ssl_mode flag: 1
+Unknown MySQL ssl_mode flag: 1
+Unknown MySQL ssl_mode flag: 1
+ruby t=128 ok
+Unknown MySQL ssl_mode flag: 1
+Unknown MySQL ssl_mode flag: 1
+Unknown MySQL ssl_mode flag: 1
+Unknown MySQL ssl_mode flag: 1
+Unknown MySQL ssl_mode flag: 1
+Unknown MySQL ssl_mode flag: 1
+Unknown MySQL ssl_mode flag: 1
+Unknown MySQL ssl_mode flag: 1
+Unknown MySQL ssl_mode flag: 1
+Unknown MySQL ssl_mode flag: 1
+Unknown MySQL ssl_mode flag: 1
+Unknown MySQL ssl_mode flag: 1
+Unknown MySQL ssl_mode flag: 1
+Unknown MySQL ssl_mode flag: 1
+Unknown MySQL ssl_mode flag: 1
+Unknown MySQL ssl_mode flag: 1
+Unknown MySQL ssl_mode flag: 1
+Unknown MySQL ssl_mode flag: 1
+Unknown MySQL ssl_mode flag: 1
+Unknown MySQL ssl_mode flag: 1
+Unknown MySQL ssl_mode flag: 1
+Unknown MySQL ssl_mode flag: 1
+Unknown MySQL ssl_mode flag: 1
+Unknown MySQL ssl_mode flag: 1
+Unknown MySQL ssl_mode flag: 1
+Unknown MySQL ssl_mode flag: 1
+Unknown MySQL ssl_mode flag: 1
+Unknown MySQL ssl_mode flag: 1
+Unknown MySQL ssl_mode flag: 1
+Unknown MySQL ssl_mode flag: 1
+Unknown MySQL ssl_mode flag: 1
+Unknown MySQL ssl_mode flag: 1
+Unknown MySQL ssl_mode flag: 1
+Unknown MySQL ssl_mode flag: 1
+Unknown MySQL ssl_mode flag: 1
+Unknown MySQL ssl_mode flag: 1
+Unknown MySQL ssl_mode flag: 1
+Unknown MySQL ssl_mode flag: 1
+Unknown MySQL ssl_mode flag: 1
+Unknown MySQL ssl_mode flag: 1
+Unknown MySQL ssl_mode flag: 1
+Unknown MySQL ssl_mode flag: 1
+Unknown MySQL ssl_mode flag: 1
+Unknown MySQL ssl_mode flag: 1
+Unknown MySQL ssl_mode flag: 1
+Unknown MySQL ssl_mode flag: 1
+Unknown MySQL ssl_mode flag: 1
+Unknown MySQL ssl_mode flag: 1
+Unknown MySQL ssl_mode flag: 1
+Unknown MySQL ssl_mode flag: 1
+Unknown MySQL ssl_mode flag: 1
+Unknown MySQL ssl_mode flag: 1
+Unknown MySQL ssl_mode flag: 1
+Unknown MySQL ssl_mode flag: 1
+Unknown MySQL ssl_mode flag: 1
+Unknown MySQL ssl_mode flag: 1
+Unknown MySQL ssl_mode flag: 1
+Unknown MySQL ssl_mode flag: 1
+Unknown MySQL ssl_mode flag: 1
+Unknown MySQL ssl_mode flag: 1
+Unknown MySQL ssl_mode flag: 1
+Unknown MySQL ssl_mode flag: 1
+Unknown MySQL ssl_mode flag: 1
+Unknown MySQL ssl_mode flag: 1
+Unknown MySQL ssl_mode flag: 1
+Unknown MySQL ssl_mode flag: 1
+Unknown MySQL ssl_mode flag: 1
+Unknown MySQL ssl_mode flag: 1
+Unknown MySQL ssl_mode flag: 1
+Unknown MySQL ssl_mode flag: 1
+Unknown MySQL ssl_mode flag: 1
+Unknown MySQL ssl_mode flag: 1
+Unknown MySQL ssl_mode flag: 1
+Unknown MySQL ssl_mode flag: 1
+Unknown MySQL ssl_mode flag: 1
+Unknown MySQL ssl_mode flag: 1
+Unknown MySQL ssl_mode flag: 1
+Unknown MySQL ssl_mode flag: 1
+Unknown MySQL ssl_mode flag: 1
+Unknown MySQL ssl_mode flag: 1
+Unknown MySQL ssl_mode flag: 1
+Unknown MySQL ssl_mode flag: 1
+Unknown MySQL ssl_mode flag: 1
+Unknown MySQL ssl_mode flag: 1
+Unknown MySQL ssl_mode flag: 1
+Unknown MySQL ssl_mode flag: 1
+Unknown MySQL ssl_mode flag: 1
+Unknown MySQL ssl_mode flag: 1
+Unknown MySQL ssl_mode flag: 1
+Unknown MySQL ssl_mode flag: 1
+Unknown MySQL ssl_mode flag: 1
+Unknown MySQL ssl_mode flag: 1
+Unknown MySQL ssl_mode flag: 1
+Unknown MySQL ssl_mode flag: 1
+Unknown MySQL ssl_mode flag: 1
+Unknown MySQL ssl_mode flag: 1
+Unknown MySQL ssl_mode flag: 1
+Unknown MySQL ssl_mode flag: 1
+Unknown MySQL ssl_mode flag: 1
+Unknown MySQL ssl_mode flag: 1
+Unknown MySQL ssl_mode flag: 1
+Unknown MySQL ssl_mode flag: 1
+Unknown MySQL ssl_mode flag: 1
+Unknown MySQL ssl_mode flag: 1
+Unknown MySQL ssl_mode flag: 1
+Unknown MySQL ssl_mode flag: 1
+Unknown MySQL ssl_mode flag: 1
+Unknown MySQL ssl_mode flag: 1
+Unknown MySQL ssl_mode flag: 1
+Unknown MySQL ssl_mode flag: 1
+Unknown MySQL ssl_mode flag: 1
+Unknown MySQL ssl_mode flag: 1
+Unknown MySQL ssl_mode flag: 1
+Unknown MySQL ssl_mode flag: 1
+Unknown MySQL ssl_mode flag: 1
+Unknown MySQL ssl_mode flag: 1
+Unknown MySQL ssl_mode flag: 1
+Unknown MySQL ssl_mode flag: 1
+Unknown MySQL ssl_mode flag: 1
+Unknown MySQL ssl_mode flag: 1
+Unknown MySQL ssl_mode flag: 1
+Unknown MySQL ssl_mode flag: 1
+Unknown MySQL ssl_mode flag: 1
+Unknown MySQL ssl_mode flag: 1
+Unknown MySQL ssl_mode flag: 1
+Unknown MySQL ssl_mode flag: 1
+Unknown MySQL ssl_mode flag: 1
+Unknown MySQL ssl_mode flag: 1
+Unknown MySQL ssl_mode flag: 1
+Unknown MySQL ssl_mode flag: 1
+Unknown MySQL ssl_mode flag: 1
+Unknown MySQL ssl_mode flag: 1
+Unknown MySQL ssl_mode flag: 1
+Unknown MySQL ssl_mode flag: 1
+Unknown MySQL ssl_mode flag: 1
+Unknown MySQL ssl_mode flag: 1
+Unknown MySQL ssl_mode flag: 1
+Unknown MySQL ssl_mode flag: 1
+Unknown MySQL ssl_mode flag: 1
+Unknown MySQL ssl_mode flag: 1
+Unknown MySQL ssl_mode flag: 1
+Unknown MySQL ssl_mode flag: 1
+Unknown MySQL ssl_mode flag: 1
+Unknown MySQL ssl_mode flag: 1
+Unknown MySQL ssl_mode flag: 1
+Unknown MySQL ssl_mode flag: 1
+Unknown MySQL ssl_mode flag: 1
+Unknown MySQL ssl_mode flag: 1
+Unknown MySQL ssl_mode flag: 1
+Unknown MySQL ssl_mode flag: 1
+Unknown MySQL ssl_mode flag: 1
+Unknown MySQL ssl_mode flag: 1
+Unknown MySQL ssl_mode flag: 1
+Unknown MySQL ssl_mode flag: 1
+Unknown MySQL ssl_mode flag: 1
+Unknown MySQL ssl_mode flag: 1
+Unknown MySQL ssl_mode flag: 1
+Unknown MySQL ssl_mode flag: 1
+Unknown MySQL ssl_mode flag: 1
+Unknown MySQL ssl_mode flag: 1
+Unknown MySQL ssl_mode flag: 1
+Unknown MySQL ssl_mode flag: 1
+Unknown MySQL ssl_mode flag: 1
+Unknown MySQL ssl_mode flag: 1
+Unknown MySQL ssl_mode flag: 1
+Unknown MySQL ssl_mode flag: 1
+Unknown MySQL ssl_mode flag: 1
+Unknown MySQL ssl_mode flag: 1
+Unknown MySQL ssl_mode flag: 1
+Unknown MySQL ssl_mode flag: 1
+Unknown MySQL ssl_mode flag: 1
+Unknown MySQL ssl_mode flag: 1
+Unknown MySQL ssl_mode flag: 1
+Unknown MySQL ssl_mode flag: 1
+Unknown MySQL ssl_mode flag: 1
+Unknown MySQL ssl_mode flag: 1
+Unknown MySQL ssl_mode flag: 1
+Unknown MySQL ssl_mode flag: 1
+Unknown MySQL ssl_mode flag: 1
+Unknown MySQL ssl_mode flag: 1
+Unknown MySQL ssl_mode flag: 1
+Unknown MySQL ssl_mode flag: 1
+Unknown MySQL ssl_mode flag: 1
+Unknown MySQL ssl_mode flag: 1
+Unknown MySQL ssl_mode flag: 1
+Unknown MySQL ssl_mode flag: 1
+Unknown MySQL ssl_mode flag: 1
+Unknown MySQL ssl_mode flag: 1
+Unknown MySQL ssl_mode flag: 1
+Unknown MySQL ssl_mode flag: 1
+Unknown MySQL ssl_mode flag: 1
+Unknown MySQL ssl_mode flag: 1
+Unknown MySQL ssl_mode flag: 1
+Unknown MySQL ssl_mode flag: 1
+Unknown MySQL ssl_mode flag: 1
+Unknown MySQL ssl_mode flag: 1
+Unknown MySQL ssl_mode flag: 1
+Unknown MySQL ssl_mode flag: 1
+Unknown MySQL ssl_mode flag: 1
+Unknown MySQL ssl_mode flag: 1
+Unknown MySQL ssl_mode flag: 1
+Unknown MySQL ssl_mode flag: 1
+Unknown MySQL ssl_mode flag: 1
+Unknown MySQL ssl_mode flag: 1
+Unknown MySQL ssl_mode flag: 1
+Unknown MySQL ssl_mode flag: 1
+Unknown MySQL ssl_mode flag: 1
+Unknown MySQL ssl_mode flag: 1
+Unknown MySQL ssl_mode flag: 1
+Unknown MySQL ssl_mode flag: 1
+Unknown MySQL ssl_mode flag: 1
+Unknown MySQL ssl_mode flag: 1
+Unknown MySQL ssl_mode flag: 1
+Unknown MySQL ssl_mode flag: 1
+Unknown MySQL ssl_mode flag: 1
+Unknown MySQL ssl_mode flag: 1
+Unknown MySQL ssl_mode flag: 1
+Unknown MySQL ssl_mode flag: 1
+Unknown MySQL ssl_mode flag: 1
+Unknown MySQL ssl_mode flag: 1
+Unknown MySQL ssl_mode flag: 1
+Unknown MySQL ssl_mode flag: 1
+Unknown MySQL ssl_mode flag: 1
+Unknown MySQL ssl_mode flag: 1
+Unknown MySQL ssl_mode flag: 1
+Unknown MySQL ssl_mode flag: 1
+Unknown MySQL ssl_mode flag: 1
+Unknown MySQL ssl_mode flag: 1
+Unknown MySQL ssl_mode flag: 1
+Unknown MySQL ssl_mode flag: 1
+Unknown MySQL ssl_mode flag: 1
+Unknown MySQL ssl_mode flag: 1
+Unknown MySQL ssl_mode flag: 1
+Unknown MySQL ssl_mode flag: 1
+Unknown MySQL ssl_mode flag: 1
+Unknown MySQL ssl_mode flag: 1
+Unknown MySQL ssl_mode flag: 1
+Unknown MySQL ssl_mode flag: 1
+Unknown MySQL ssl_mode flag: 1
+Unknown MySQL ssl_mode flag: 1
+Unknown MySQL ssl_mode flag: 1
+Unknown MySQL ssl_mode flag: 1
+Unknown MySQL ssl_mode flag: 1
+Unknown MySQL ssl_mode flag: 1
+Unknown MySQL ssl_mode flag: 1
+Unknown MySQL ssl_mode flag: 1
+Unknown MySQL ssl_mode flag: 1
+Unknown MySQL ssl_mode flag: 1
+Unknown MySQL ssl_mode flag: 1
+Unknown MySQL ssl_mode flag: 1
+Unknown MySQL ssl_mode flag: 1
+Unknown MySQL ssl_mode flag: 1
+Unknown MySQL ssl_mode flag: 1
+Unknown MySQL ssl_mode flag: 1
+Unknown MySQL ssl_mode flag: 1
+Unknown MySQL ssl_mode flag: 1
+ruby t=256 ok
+Unknown MySQL ssl_mode flag: 1
+Unknown MySQL ssl_mode flag: 1
+Unknown MySQL ssl_mode flag: 1
+Unknown MySQL ssl_mode flag: 1
+Unknown MySQL ssl_mode flag: 1
+Unknown MySQL ssl_mode flag: 1
+Unknown MySQL ssl_mode flag: 1
+Unknown MySQL ssl_mode flag: 1
+Unknown MySQL ssl_mode flag: 1
+Unknown MySQL ssl_mode flag: 1
+Unknown MySQL ssl_mode flag: 1
+Unknown MySQL ssl_mode flag: 1
+Unknown MySQL ssl_mode flag: 1
+Unknown MySQL ssl_mode flag: 1
+Unknown MySQL ssl_mode flag: 1
+Unknown MySQL ssl_mode flag: 1
+Unknown MySQL ssl_mode flag: 1
+Unknown MySQL ssl_mode flag: 1
+Unknown MySQL ssl_mode flag: 1
+Unknown MySQL ssl_mode flag: 1
+Unknown MySQL ssl_mode flag: 1
+Unknown MySQL ssl_mode flag: 1
+Unknown MySQL ssl_mode flag: 1
+Unknown MySQL ssl_mode flag: 1
+Unknown MySQL ssl_mode flag: 1
+Unknown MySQL ssl_mode flag: 1
+Unknown MySQL ssl_mode flag: 1
+Unknown MySQL ssl_mode flag: 1
+Unknown MySQL ssl_mode flag: 1
+Unknown MySQL ssl_mode flag: 1
+Unknown MySQL ssl_mode flag: 1
+Unknown MySQL ssl_mode flag: 1
+Unknown MySQL ssl_mode flag: 1
+Unknown MySQL ssl_mode flag: 1
+Unknown MySQL ssl_mode flag: 1
+Unknown MySQL ssl_mode flag: 1
+Unknown MySQL ssl_mode flag: 1
+Unknown MySQL ssl_mode flag: 1
+Unknown MySQL ssl_mode flag: 1
+Unknown MySQL ssl_mode flag: 1
+Unknown MySQL ssl_mode flag: 1
+Unknown MySQL ssl_mode flag: 1
+Unknown MySQL ssl_mode flag: 1
+Unknown MySQL ssl_mode flag: 1
+Unknown MySQL ssl_mode flag: 1
+Unknown MySQL ssl_mode flag: 1
+Unknown MySQL ssl_mode flag: 1
+Unknown MySQL ssl_mode flag: 1
+Unknown MySQL ssl_mode flag: 1
+Unknown MySQL ssl_mode flag: 1
+Unknown MySQL ssl_mode flag: 1
+Unknown MySQL ssl_mode flag: 1
+Unknown MySQL ssl_mode flag: 1
+Unknown MySQL ssl_mode flag: 1
+Unknown MySQL ssl_mode flag: 1
+Unknown MySQL ssl_mode flag: 1
+Unknown MySQL ssl_mode flag: 1
+Unknown MySQL ssl_mode flag: 1
+Unknown MySQL ssl_mode flag: 1
+Unknown MySQL ssl_mode flag: 1
+Unknown MySQL ssl_mode flag: 1
+Unknown MySQL ssl_mode flag: 1
+Unknown MySQL ssl_mode flag: 1
+Unknown MySQL ssl_mode flag: 1
+Unknown MySQL ssl_mode flag: 1
+Unknown MySQL ssl_mode flag: 1
+Unknown MySQL ssl_mode flag: 1
+Unknown MySQL ssl_mode flag: 1
+Unknown MySQL ssl_mode flag: 1
+Unknown MySQL ssl_mode flag: 1
+Unknown MySQL ssl_mode flag: 1
+Unknown MySQL ssl_mode flag: 1
+Unknown MySQL ssl_mode flag: 1
+Unknown MySQL ssl_mode flag: 1
+Unknown MySQL ssl_mode flag: 1
+Unknown MySQL ssl_mode flag: 1
+Unknown MySQL ssl_mode flag: 1
+Unknown MySQL ssl_mode flag: 1
+Unknown MySQL ssl_mode flag: 1
+Unknown MySQL ssl_mode flag: 1
+Unknown MySQL ssl_mode flag: 1
+Unknown MySQL ssl_mode flag: 1
+Unknown MySQL ssl_mode flag: 1
+Unknown MySQL ssl_mode flag: 1
+Unknown MySQL ssl_mode flag: 1
+Unknown MySQL ssl_mode flag: 1
+Unknown MySQL ssl_mode flag: 1
+Unknown MySQL ssl_mode flag: 1
+Unknown MySQL ssl_mode flag: 1
+Unknown MySQL ssl_mode flag: 1
+Unknown MySQL ssl_mode flag: 1
+Unknown MySQL ssl_mode flag: 1
+Unknown MySQL ssl_mode flag: 1
+Unknown MySQL ssl_mode flag: 1
+Unknown MySQL ssl_mode flag: 1
+Unknown MySQL ssl_mode flag: 1
+Unknown MySQL ssl_mode flag: 1
+Unknown MySQL ssl_mode flag: 1
+Unknown MySQL ssl_mode flag: 1
+Unknown MySQL ssl_mode flag: 1
+Unknown MySQL ssl_mode flag: 1
+Unknown MySQL ssl_mode flag: 1
+Unknown MySQL ssl_mode flag: 1
+Unknown MySQL ssl_mode flag: 1
+Unknown MySQL ssl_mode flag: 1
+Unknown MySQL ssl_mode flag: 1
+Unknown MySQL ssl_mode flag: 1
+Unknown MySQL ssl_mode flag: 1
+Unknown MySQL ssl_mode flag: 1
+Unknown MySQL ssl_mode flag: 1
+Unknown MySQL ssl_mode flag: 1
+Unknown MySQL ssl_mode flag: 1
+Unknown MySQL ssl_mode flag: 1
+Unknown MySQL ssl_mode flag: 1
+Unknown MySQL ssl_mode flag: 1
+Unknown MySQL ssl_mode flag: 1
+Unknown MySQL ssl_mode flag: 1
+Unknown MySQL ssl_mode flag: 1
+Unknown MySQL ssl_mode flag: 1
+Unknown MySQL ssl_mode flag: 1
+Unknown MySQL ssl_mode flag: 1
+Unknown MySQL ssl_mode flag: 1
+Unknown MySQL ssl_mode flag: 1
+Unknown MySQL ssl_mode flag: 1
+Unknown MySQL ssl_mode flag: 1
+Unknown MySQL ssl_mode flag: 1
+Unknown MySQL ssl_mode flag: 1
+Unknown MySQL ssl_mode flag: 1
+Unknown MySQL ssl_mode flag: 1
+Unknown MySQL ssl_mode flag: 1
+Unknown MySQL ssl_mode flag: 1
+Unknown MySQL ssl_mode flag: 1
+Unknown MySQL ssl_mode flag: 1
+Unknown MySQL ssl_mode flag: 1
+Unknown MySQL ssl_mode flag: 1
+Unknown MySQL ssl_mode flag: 1
+Unknown MySQL ssl_mode flag: 1
+Unknown MySQL ssl_mode flag: 1
+Unknown MySQL ssl_mode flag: 1
+Unknown MySQL ssl_mode flag: 1
+Unknown MySQL ssl_mode flag: 1
+Unknown MySQL ssl_mode flag: 1
+Unknown MySQL ssl_mode flag: 1
+Unknown MySQL ssl_mode flag: 1
+Unknown MySQL ssl_mode flag: 1
+Unknown MySQL ssl_mode flag: 1
+Unknown MySQL ssl_mode flag: 1
+Unknown MySQL ssl_mode flag: 1
+Unknown MySQL ssl_mode flag: 1
+Unknown MySQL ssl_mode flag: 1
+Unknown MySQL ssl_mode flag: 1
+Unknown MySQL ssl_mode flag: 1
+Unknown MySQL ssl_mode flag: 1
+Unknown MySQL ssl_mode flag: 1
+Unknown MySQL ssl_mode flag: 1
+Unknown MySQL ssl_mode flag: 1
+Unknown MySQL ssl_mode flag: 1
+Unknown MySQL ssl_mode flag: 1
+Unknown MySQL ssl_mode flag: 1
+Unknown MySQL ssl_mode flag: 1
+Unknown MySQL ssl_mode flag: 1
+Unknown MySQL ssl_mode flag: 1
+Unknown MySQL ssl_mode flag: 1
+Unknown MySQL ssl_mode flag: 1
+Unknown MySQL ssl_mode flag: 1
+Unknown MySQL ssl_mode flag: 1
+Unknown MySQL ssl_mode flag: 1
+Unknown MySQL ssl_mode flag: 1
+Unknown MySQL ssl_mode flag: 1
+Unknown MySQL ssl_mode flag: 1
+Unknown MySQL ssl_mode flag: 1
+Unknown MySQL ssl_mode flag: 1
+Unknown MySQL ssl_mode flag: 1
+Unknown MySQL ssl_mode flag: 1
+Unknown MySQL ssl_mode flag: 1
+Unknown MySQL ssl_mode flag: 1
+Unknown MySQL ssl_mode flag: 1
+Unknown MySQL ssl_mode flag: 1
+Unknown MySQL ssl_mode flag: 1
+Unknown MySQL ssl_mode flag: 1
+Unknown MySQL ssl_mode flag: 1
+Unknown MySQL ssl_mode flag: 1
+Unknown MySQL ssl_mode flag: 1
+Unknown MySQL ssl_mode flag: 1
+Unknown MySQL ssl_mode flag: 1
+Unknown MySQL ssl_mode flag: 1
+Unknown MySQL ssl_mode flag: 1
+Unknown MySQL ssl_mode flag: 1
+Unknown MySQL ssl_mode flag: 1
+Unknown MySQL ssl_mode flag: 1
+Unknown MySQL ssl_mode flag: 1
+Unknown MySQL ssl_mode flag: 1
+Unknown MySQL ssl_mode flag: 1
+Unknown MySQL ssl_mode flag: 1
+Unknown MySQL ssl_mode flag: 1
+Unknown MySQL ssl_mode flag: 1
+Unknown MySQL ssl_mode flag: 1
+Unknown MySQL ssl_mode flag: 1
+Unknown MySQL ssl_mode flag: 1
+Unknown MySQL ssl_mode flag: 1
+Unknown MySQL ssl_mode flag: 1
+Unknown MySQL ssl_mode flag: 1
+Unknown MySQL ssl_mode flag: 1
+Unknown MySQL ssl_mode flag: 1
+Unknown MySQL ssl_mode flag: 1
+Unknown MySQL ssl_mode flag: 1
+Unknown MySQL ssl_mode flag: 1
+Unknown MySQL ssl_mode flag: 1
+Unknown MySQL ssl_mode flag: 1
+Unknown MySQL ssl_mode flag: 1
+Unknown MySQL ssl_mode flag: 1
+Unknown MySQL ssl_mode flag: 1
+Unknown MySQL ssl_mode flag: 1
+Unknown MySQL ssl_mode flag: 1
+Unknown MySQL ssl_mode flag: 1
+Unknown MySQL ssl_mode flag: 1
+Unknown MySQL ssl_mode flag: 1
+Unknown MySQL ssl_mode flag: 1
+Unknown MySQL ssl_mode flag: 1
+Unknown MySQL ssl_mode flag: 1
+Unknown MySQL ssl_mode flag: 1
+Unknown MySQL ssl_mode flag: 1
+Unknown MySQL ssl_mode flag: 1
+Unknown MySQL ssl_mode flag: 1
+Unknown MySQL ssl_mode flag: 1
+Unknown MySQL ssl_mode flag: 1
+Unknown MySQL ssl_mode flag: 1
+Unknown MySQL ssl_mode flag: 1
+Unknown MySQL ssl_mode flag: 1
+Unknown MySQL ssl_mode flag: 1
+Unknown MySQL ssl_mode flag: 1
+Unknown MySQL ssl_mode flag: 1
+Unknown MySQL ssl_mode flag: 1
+Unknown MySQL ssl_mode flag: 1
+Unknown MySQL ssl_mode flag: 1
+Unknown MySQL ssl_mode flag: 1
+Unknown MySQL ssl_mode flag: 1
+Unknown MySQL ssl_mode flag: 1
+Unknown MySQL ssl_mode flag: 1
+Unknown MySQL ssl_mode flag: 1
+Unknown MySQL ssl_mode flag: 1
+Unknown MySQL ssl_mode flag: 1
+Unknown MySQL ssl_mode flag: 1
+Unknown MySQL ssl_mode flag: 1
+Unknown MySQL ssl_mode flag: 1
+Unknown MySQL ssl_mode flag: 1
+Unknown MySQL ssl_mode flag: 1
+Unknown MySQL ssl_mode flag: 1
+Unknown MySQL ssl_mode flag: 1
+Unknown MySQL ssl_mode flag: 1
+Unknown MySQL ssl_mode flag: 1
+Unknown MySQL ssl_mode flag: 1
+Unknown MySQL ssl_mode flag: 1
+Unknown MySQL ssl_mode flag: 1
+Unknown MySQL ssl_mode flag: 1
+Unknown MySQL ssl_mode flag: 1
+Unknown MySQL ssl_mode flag: 1
+Unknown MySQL ssl_mode flag: 1
+Unknown MySQL ssl_mode flag: 1
+Unknown MySQL ssl_mode flag: 1
+Unknown MySQL ssl_mode flag: 1
+Unknown MySQL ssl_mode flag: 1
+Unknown MySQL ssl_mode flag: 1
+Unknown MySQL ssl_mode flag: 1
+Unknown MySQL ssl_mode flag: 1
+Unknown MySQL ssl_mode flag: 1
+Unknown MySQL ssl_mode flag: 1
+Unknown MySQL ssl_mode flag: 1
+Unknown MySQL ssl_mode flag: 1
+Unknown MySQL ssl_mode flag: 1
+Unknown MySQL ssl_mode flag: 1
+Unknown MySQL ssl_mode flag: 1
+Unknown MySQL ssl_mode flag: 1
+Unknown MySQL ssl_mode flag: 1
+Unknown MySQL ssl_mode flag: 1
+Unknown MySQL ssl_mode flag: 1
+Unknown MySQL ssl_mode flag: 1
+Unknown MySQL ssl_mode flag: 1
+Unknown MySQL ssl_mode flag: 1
+Unknown MySQL ssl_mode flag: 1
+Unknown MySQL ssl_mode flag: 1
+Unknown MySQL ssl_mode flag: 1
+Unknown MySQL ssl_mode flag: 1
+Unknown MySQL ssl_mode flag: 1
+Unknown MySQL ssl_mode flag: 1
+Unknown MySQL ssl_mode flag: 1
+Unknown MySQL ssl_mode flag: 1
+Unknown MySQL ssl_mode flag: 1
+Unknown MySQL ssl_mode flag: 1
+Unknown MySQL ssl_mode flag: 1
+Unknown MySQL ssl_mode flag: 1
+Unknown MySQL ssl_mode flag: 1
+Unknown MySQL ssl_mode flag: 1
+Unknown MySQL ssl_mode flag: 1
+Unknown MySQL ssl_mode flag: 1
+Unknown MySQL ssl_mode flag: 1
+Unknown MySQL ssl_mode flag: 1
+Unknown MySQL ssl_mode flag: 1
+Unknown MySQL ssl_mode flag: 1
+Unknown MySQL ssl_mode flag: 1
+Unknown MySQL ssl_mode flag: 1
+Unknown MySQL ssl_mode flag: 1
+Unknown MySQL ssl_mode flag: 1
+Unknown MySQL ssl_mode flag: 1
+Unknown MySQL ssl_mode flag: 1
+Unknown MySQL ssl_mode flag: 1
+Unknown MySQL ssl_mode flag: 1
+Unknown MySQL ssl_mode flag: 1
+Unknown MySQL ssl_mode flag: 1
+Unknown MySQL ssl_mode flag: 1
+Unknown MySQL ssl_mode flag: 1
+Unknown MySQL ssl_mode flag: 1
+Unknown MySQL ssl_mode flag: 1
+Unknown MySQL ssl_mode flag: 1
+Unknown MySQL ssl_mode flag: 1
+Unknown MySQL ssl_mode flag: 1
+Unknown MySQL ssl_mode flag: 1
+Unknown MySQL ssl_mode flag: 1
+Unknown MySQL ssl_mode flag: 1
+Unknown MySQL ssl_mode flag: 1
+Unknown MySQL ssl_mode flag: 1
+Unknown MySQL ssl_mode flag: 1
+Unknown MySQL ssl_mode flag: 1
+Unknown MySQL ssl_mode flag: 1
+Unknown MySQL ssl_mode flag: 1
+Unknown MySQL ssl_mode flag: 1
+Unknown MySQL ssl_mode flag: 1
+Unknown MySQL ssl_mode flag: 1
+Unknown MySQL ssl_mode flag: 1
+Unknown MySQL ssl_mode flag: 1
+Unknown MySQL ssl_mode flag: 1
+Unknown MySQL ssl_mode flag: 1
+Unknown MySQL ssl_mode flag: 1
+Unknown MySQL ssl_mode flag: 1
+Unknown MySQL ssl_mode flag: 1
+Unknown MySQL ssl_mode flag: 1
+Unknown MySQL ssl_mode flag: 1
+Unknown MySQL ssl_mode flag: 1
+Unknown MySQL ssl_mode flag: 1
+Unknown MySQL ssl_mode flag: 1
+Unknown MySQL ssl_mode flag: 1
+Unknown MySQL ssl_mode flag: 1
+Unknown MySQL ssl_mode flag: 1
+Unknown MySQL ssl_mode flag: 1
+Unknown MySQL ssl_mode flag: 1
+Unknown MySQL ssl_mode flag: 1
+Unknown MySQL ssl_mode flag: 1
+Unknown MySQL ssl_mode flag: 1
+Unknown MySQL ssl_mode flag: 1
+Unknown MySQL ssl_mode flag: 1
+Unknown MySQL ssl_mode flag: 1
+Unknown MySQL ssl_mode flag: 1
+Unknown MySQL ssl_mode flag: 1
+Unknown MySQL ssl_mode flag: 1
+Unknown MySQL ssl_mode flag: 1
+Unknown MySQL ssl_mode flag: 1
+Unknown MySQL ssl_mode flag: 1
+Unknown MySQL ssl_mode flag: 1
+Unknown MySQL ssl_mode flag: 1
+Unknown MySQL ssl_mode flag: 1
+Unknown MySQL ssl_mode flag: 1
+Unknown MySQL ssl_mode flag: 1
+Unknown MySQL ssl_mode flag: 1
+Unknown MySQL ssl_mode flag: 1
+Unknown MySQL ssl_mode flag: 1
+Unknown MySQL ssl_mode flag: 1
+Unknown MySQL ssl_mode flag: 1
+Unknown MySQL ssl_mode flag: 1
+Unknown MySQL ssl_mode flag: 1
+Unknown MySQL ssl_mode flag: 1
+Unknown MySQL ssl_mode flag: 1
+Unknown MySQL ssl_mode flag: 1
+Unknown MySQL ssl_mode flag: 1
+Unknown MySQL ssl_mode flag: 1
+Unknown MySQL ssl_mode flag: 1
+Unknown MySQL ssl_mode flag: 1
+Unknown MySQL ssl_mode flag: 1
+Unknown MySQL ssl_mode flag: 1
+Unknown MySQL ssl_mode flag: 1
+Unknown MySQL ssl_mode flag: 1
+Unknown MySQL ssl_mode flag: 1
+Unknown MySQL ssl_mode flag: 1
+Unknown MySQL ssl_mode flag: 1
+Unknown MySQL ssl_mode flag: 1
+Unknown MySQL ssl_mode flag: 1
+Unknown MySQL ssl_mode flag: 1
+Unknown MySQL ssl_mode flag: 1
+Unknown MySQL ssl_mode flag: 1
+Unknown MySQL ssl_mode flag: 1
+Unknown MySQL ssl_mode flag: 1
+Unknown MySQL ssl_mode flag: 1
+Unknown MySQL ssl_mode flag: 1
+Unknown MySQL ssl_mode flag: 1
+Unknown MySQL ssl_mode flag: 1
+Unknown MySQL ssl_mode flag: 1
+Unknown MySQL ssl_mode flag: 1
+Unknown MySQL ssl_mode flag: 1
+Unknown MySQL ssl_mode flag: 1
+Unknown MySQL ssl_mode flag: 1
+Unknown MySQL ssl_mode flag: 1
+Unknown MySQL ssl_mode flag: 1
+Unknown MySQL ssl_mode flag: 1
+Unknown MySQL ssl_mode flag: 1
+Unknown MySQL ssl_mode flag: 1
+Unknown MySQL ssl_mode flag: 1
+Unknown MySQL ssl_mode flag: 1
+Unknown MySQL ssl_mode flag: 1
+Unknown MySQL ssl_mode flag: 1
+Unknown MySQL ssl_mode flag: 1
+Unknown MySQL ssl_mode flag: 1
+Unknown MySQL ssl_mode flag: 1
+Unknown MySQL ssl_mode flag: 1
+Unknown MySQL ssl_mode flag: 1
+Unknown MySQL ssl_mode flag: 1
+Unknown MySQL ssl_mode flag: 1
+Unknown MySQL ssl_mode flag: 1
+Unknown MySQL ssl_mode flag: 1
+Unknown MySQL ssl_mode flag: 1
+Unknown MySQL ssl_mode flag: 1
+Unknown MySQL ssl_mode flag: 1
+Unknown MySQL ssl_mode flag: 1
+Unknown MySQL ssl_mode flag: 1
+Unknown MySQL ssl_mode flag: 1
+Unknown MySQL ssl_mode flag: 1
+Unknown MySQL ssl_mode flag: 1
+Unknown MySQL ssl_mode flag: 1
+Unknown MySQL ssl_mode flag: 1
+Unknown MySQL ssl_mode flag: 1
+Unknown MySQL ssl_mode flag: 1
+Unknown MySQL ssl_mode flag: 1
+Unknown MySQL ssl_mode flag: 1
+Unknown MySQL ssl_mode flag: 1
+Unknown MySQL ssl_mode flag: 1
+Unknown MySQL ssl_mode flag: 1
+Unknown MySQL ssl_mode flag: 1
+Unknown MySQL ssl_mode flag: 1
+Unknown MySQL ssl_mode flag: 1
+Unknown MySQL ssl_mode flag: 1
+Unknown MySQL ssl_mode flag: 1
+Unknown MySQL ssl_mode flag: 1
+Unknown MySQL ssl_mode flag: 1
+Unknown MySQL ssl_mode flag: 1
+Unknown MySQL ssl_mode flag: 1
+Unknown MySQL ssl_mode flag: 1
+Unknown MySQL ssl_mode flag: 1
+Unknown MySQL ssl_mode flag: 1
+Unknown MySQL ssl_mode flag: 1
+Unknown MySQL ssl_mode flag: 1
+Unknown MySQL ssl_mode flag: 1
+Unknown MySQL ssl_mode flag: 1
+Unknown MySQL ssl_mode flag: 1
+Unknown MySQL ssl_mode flag: 1
+Unknown MySQL ssl_mode flag: 1
+Unknown MySQL ssl_mode flag: 1
+Unknown MySQL ssl_mode flag: 1
+Unknown MySQL ssl_mode flag: 1
+Unknown MySQL ssl_mode flag: 1
+Unknown MySQL ssl_mode flag: 1
+Unknown MySQL ssl_mode flag: 1
+Unknown MySQL ssl_mode flag: 1
+Unknown MySQL ssl_mode flag: 1
+Unknown MySQL ssl_mode flag: 1
+Unknown MySQL ssl_mode flag: 1
+Unknown MySQL ssl_mode flag: 1
+Unknown MySQL ssl_mode flag: 1
+Unknown MySQL ssl_mode flag: 1
+Unknown MySQL ssl_mode flag: 1
+Unknown MySQL ssl_mode flag: 1
+Unknown MySQL ssl_mode flag: 1
+Unknown MySQL ssl_mode flag: 1
+Unknown MySQL ssl_mode flag: 1
+Unknown MySQL ssl_mode flag: 1
+Unknown MySQL ssl_mode flag: 1
+Unknown MySQL ssl_mode flag: 1
+Unknown MySQL ssl_mode flag: 1
+Unknown MySQL ssl_mode flag: 1
+Unknown MySQL ssl_mode flag: 1
+Unknown MySQL ssl_mode flag: 1
+Unknown MySQL ssl_mode flag: 1
+Unknown MySQL ssl_mode flag: 1
+Unknown MySQL ssl_mode flag: 1
+Unknown MySQL ssl_mode flag: 1
+Unknown MySQL ssl_mode flag: 1
+Unknown MySQL ssl_mode flag: 1
+Unknown MySQL ssl_mode flag: 1
+Unknown MySQL ssl_mode flag: 1
+Unknown MySQL ssl_mode flag: 1
+Unknown MySQL ssl_mode flag: 1
+Unknown MySQL ssl_mode flag: 1
+Unknown MySQL ssl_mode flag: 1
+Unknown MySQL ssl_mode flag: 1
+Unknown MySQL ssl_mode flag: 1
+Unknown MySQL ssl_mode flag: 1
+Unknown MySQL ssl_mode flag: 1
+Unknown MySQL ssl_mode flag: 1
+Unknown MySQL ssl_mode flag: 1
+Unknown MySQL ssl_mode flag: 1
+Unknown MySQL ssl_mode flag: 1
+Unknown MySQL ssl_mode flag: 1
+Unknown MySQL ssl_mode flag: 1
+Unknown MySQL ssl_mode flag: 1
+Unknown MySQL ssl_mode flag: 1
+Unknown MySQL ssl_mode flag: 1
+Unknown MySQL ssl_mode flag: 1
+Unknown MySQL ssl_mode flag: 1
+Unknown MySQL ssl_mode flag: 1
+Unknown MySQL ssl_mode flag: 1
+Unknown MySQL ssl_mode flag: 1
+Unknown MySQL ssl_mode flag: 1
+Unknown MySQL ssl_mode flag: 1
+Unknown MySQL ssl_mode flag: 1
+Unknown MySQL ssl_mode flag: 1

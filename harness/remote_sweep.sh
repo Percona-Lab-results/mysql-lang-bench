@@ -15,6 +15,11 @@ ulimit -n 65536 2>/dev/null || ulimit -n 4096 2>/dev/null || true
 STATUS="results/$SWEEP_ID.status"
 LOG="results/$SWEEP_ID.log"
 source common/workload.env
+# The caller may force a mode without editing the deployed workload.env
+# (e.g. run both modes back to back).
+if [ -n "${BENCH_DURATION_OVERRIDE:-}" ]; then
+    BENCH_DURATION_S="$BENCH_DURATION_OVERRIDE"
+fi
 
 overall=DONE
 for L in $LANGS; do
@@ -49,6 +54,9 @@ for L in $LANGS; do
             source config/mysql.env
             source common/workload.env
             set +a
+            if [ -n "${BENCH_DURATION_OVERRIDE:-}" ]; then
+                export BENCH_DURATION_S="$BENCH_DURATION_OVERRIDE"
+            fi
             export BENCH_THREADS="$T"
             OUT="results/$SWEEP_ID-$L-t$T.json"
             CPUF="results/$SWEEP_ID-$L-t$T.cpu"
@@ -64,15 +72,18 @@ for L in $LANGS; do
             /usr/bin/time -o "$CPUF" -f "%U %S" bash "impl/$L/run.sh" > "$OUT"
             W1=$(date +%s.%N)
             SRV1=$(awk '{print $14+$15}' "/proc/$MYSQLD_PID/stat")
-            python3 - "$OUT" "$CPUF" "$SRV0" "$SRV1" "$CLK" "$W0" "$W1" <<'PYEOF'
+            python3 - "$OUT" "$CPUF" "$SRV0" "$SRV1" "$CLK" "$W0" "$W1" "${BENCH_DURATION_S:-0}" <<'PYEOF'
 import json, sys
 out, cpuf = sys.argv[1], sys.argv[2]
 srv0, srv1, clk, w0, w1 = map(float, sys.argv[3:8])
+dur = int(sys.argv[8])
 u, s = map(float, open(cpuf).read().split()[:2])
 r = json.load(open(out))
 r["client_cpu_s"] = round(u + s, 2)
 r["server_cpu_s"] = round((srv1 - srv0) / clk, 2)
 r["run_wall_s"] = round(w1 - w0, 2)
+r["mode"] = "duration" if dur > 0 else "events"
+r["duration_s"] = dur
 json.dump(r, open(out, "w"), separators=(",", ":"))
 PYEOF
             rm -f "$CPUF"
