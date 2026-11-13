@@ -605,10 +605,10 @@ const PAGE_BARS = __PAGE_BARS__;
     // run from a 50%-lighter tint at the bar start to the full hue at the tip.
     const gdefs = el("defs", {});
     svg.appendChild(gdefs);
-    // hsl helpers: `h` in degrees (120=green .. 0=red). The lighter stop lifts
-    // lightness halfway to white; both read on light and dark surfaces alike.
+    // hsl helpers: `h` in degrees (120=green .. 0=red). The left (start) stop is
+    // a lighter tint of the full hue; both read on light and dark surfaces alike.
     const perfFill = h => `hsl(${h.toFixed(1)}, 66%, 45%)`;
-    const perfTint = h => `hsl(${h.toFixed(1)}, 66%, 73%)`;
+    const perfTint = h => `hsl(${h.toFixed(1)}, 66%, 53%)`;
     // Throughput gridlines with tick labels along the top.
     for (let k=0; k*step<=yMax+1e-6; k++){ const tv=k*step, x=X(tv);
       svg.appendChild(el("line", { x1: x, x2: x, y1: BM.t, y2: BM.t+BIH, stroke: "var(--grid)", "stroke-width": 1 }));
