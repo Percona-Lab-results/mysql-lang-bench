@@ -26,8 +26,9 @@ BARS_OUT = ROOT / "report" / "bars.html"
 PNG_DIR = ROOT / "report" / "png"
 
 # Categorical palette (dataviz slots 1..13), light and dark surfaces. Kept here
-# as the single source of truth so we can also emit a 35%-darker companion of
-# each hue (--cat-N-d), used as the right-hand stop of the bar gradients.
+# as the single source of truth so we can also emit a 50%-lighter companion of
+# each hue (--cat-N-l), used as the left-hand stop of the bar gradients (which
+# fade from that lighter tint up to the base color at the bar tip).
 PAL_LIGHT = {
     1: "#2a78d6", 2: "#eb6834", 3: "#1baf7a", 4: "#eda100", 5: "#e87ba4",
     6: "#008300", 7: "#6250d6", 8: "#e34948", 9: "#84b000", 10: "#0092c4",
@@ -40,19 +41,19 @@ PAL_DARK = {
 }
 
 
-def darken(hex_color, frac=0.35):
-    """Return hex_color with each RGB channel reduced by `frac` (toward black)."""
+def lighten(hex_color, frac=0.5):
+    """Return hex_color with each RGB channel moved `frac` of the way to white."""
     h = hex_color.lstrip("#")
     r, g, b = (int(h[i:i+2], 16) for i in (0, 2, 4))
-    k = 1.0 - frac
-    return "#%02x%02x%02x" % (round(r*k), round(g*k), round(b*k))
+    mix = lambda c: round(c + (255 - c) * frac)
+    return "#%02x%02x%02x" % (mix(r), mix(g), mix(b))
 
 
 def cat_css(pal):
-    """CSS declarations for the base hues plus their 35%-darker companions."""
+    """CSS declarations for the base hues plus their 50%-lighter companions."""
     base = " ".join(f"--cat-{n}: {pal[n]};" for n in sorted(pal))
-    dark = " ".join(f"--cat-{n}-d: {darken(pal[n])};" for n in sorted(pal))
-    return base + "\n      " + dark
+    light = " ".join(f"--cat-{n}-l: {lighten(pal[n])};" for n in sorted(pal))
+    return base + "\n      " + light
 
 DISPLAY = {
     "c": "C", "cpp": "C++", "swift": "Swift", "rust": "Rust", "php": "PHP",
@@ -599,16 +600,16 @@ const PAGE_BARS = __PAGE_BARS__;
     const step = niceStep(yMax, 5);
     const X = v => BM.l + (v/yMax)*BIW;
     const svg = el("svg", { viewBox: `0 0 ${BW} ${BH}`, role: "img", "aria-label": cfg.ariaLabel });
-    // One left->right gradient per palette slot used: the series color at the
-    // bar start (x=0) fading to its 35%-darker companion at the bar tip (x=1).
-    // objectBoundingBox units make each bar span its own full gradient. Stops
-    // use CSS vars via inline style so they stay theme-reactive.
+    // One left->right gradient per palette slot used: the 50%-lighter companion
+    // at the bar start (x=0) deepening to the base series color at the bar tip
+    // (x=1). objectBoundingBox units make each bar span its own full gradient.
+    // Stops use CSS vars via inline style so they stay theme-reactive.
     const slotOf = d => (d.st.color.match(/--cat-(\d+)/) || [])[1];
     const gdefs = el("defs", {});
     for (const sl of [...new Set(cfg.seriesDefs.map(slotOf).filter(Boolean))]) {
       const g = el("linearGradient", { id: `g-${cfg.hostId}-${sl}`, x1: "0", y1: "0", x2: "1", y2: "0" });
-      const s0 = el("stop", { offset: "0" }); s0.style.stopColor = `var(--cat-${sl})`;
-      const s1 = el("stop", { offset: "1" }); s1.style.stopColor = `var(--cat-${sl}-d)`;
+      const s0 = el("stop", { offset: "0" }); s0.style.stopColor = `var(--cat-${sl}-l)`;
+      const s1 = el("stop", { offset: "1" }); s1.style.stopColor = `var(--cat-${sl})`;
       g.append(s0, s1); gdefs.appendChild(g);
     }
     svg.appendChild(gdefs);
