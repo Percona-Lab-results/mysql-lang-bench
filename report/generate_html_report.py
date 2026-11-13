@@ -120,13 +120,14 @@ def main():
         for l, v, s in kpis)
 
     sections = ""
-    png_ids = []
+    png_ids = []  # (sid, kind): kind "line" or "bars" (bars need a taller PNG)
     for w in (1, 2, 3, 4):
         if w not in workloads:
             continue
         m = workloads[w]
         sid = f"w{w}"
-        png_ids.append(sid)
+        png_ids.append((sid, "line"))
+        png_ids.append((sid + "-bars", "bars"))
         tabs = ('<details class="tables"><summary>Table view — throughput ('
                 + m["unit"] + ')</summary><div class="tablewrap">'
                 + table(m["series"], m["threads"]) + '</div></details>')
@@ -137,6 +138,12 @@ def main():
     <div class="legend" id="legend-{sid}"></div>
     <div class="bigchart" id="chart-{sid}"></div>
     {tabs}
+  </section>
+  <section id="sec-{sid}-bars">
+    <h2>{m['title']} — grouped by worker count</h2>
+    <p class="sub">Throughput ({m['unit']}) per language, grouped by worker count (512 at top down to 4). Same colour and inner glyph per language as above.</p>
+    <div class="legend" id="legend-{sid}-bars"></div>
+    <div class="bigchart" id="chart-{sid}-bars"></div>
   </section>"""
 
     html = HTML_TEMPLATE
@@ -162,10 +169,10 @@ def main():
         return
     PNG_DIR.mkdir(exist_ok=True)
 
-    def shoot(png, url):
+    def shoot(png, url, h):
         cmd = [chromium, "--headless", "--disable-gpu", "--no-sandbox",
                "--hide-scrollbars", "--force-device-scale-factor=2",
-               f"--screenshot={png}", "--window-size=1280,760", url]
+               f"--screenshot={png}", f"--window-size=1280,{h}", url]
         try:
             r = subprocess.run(cmd, capture_output=True, text=True, timeout=120)
         except subprocess.TimeoutExpired:
@@ -174,9 +181,14 @@ def main():
               else f"png FAILED {png.name}: {r.stderr.strip()[-200:]}",
               file=sys.stderr if not png.exists() else sys.stdout)
 
-    for sid in png_ids:
-        shoot(PNG_DIR / f"{sid}.png", f"file://{OUT}#png-{sid}")
-        shoot(PNG_DIR / f"{sid}-optimized.png", f"file://{OUT}?optimized=1#png-{sid}")
+    # Bar charts are tall (one row per language x 8 worker-count groups);
+    # size the PNG window to the content so it isn't cropped.
+    nlang = len(langs)
+    for sid, kind in png_ids:
+        h_def = 1700 if kind == "bars" else 760
+        h_opt = 820 if kind == "bars" else 760   # optimized view = only Go + C#
+        shoot(PNG_DIR / f"{sid}.png", f"file://{OUT}#png-{sid}", h_def)
+        shoot(PNG_DIR / f"{sid}-optimized.png", f"file://{OUT}?optimized=1#png-{sid}", h_opt)
 
 
 HTML_TEMPLATE = r"""<!DOCTYPE html>
@@ -248,6 +260,8 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
   .bigchart svg:focus { outline: 2px solid var(--cat-1); outline-offset: 2px; border-radius: 4px; }
   svg text { font-family: inherit; font-size: 10.5px; fill: var(--muted); font-variant-numeric: tabular-nums; }
   svg .seriesname { fill: var(--text-secondary); font-weight: 600; font-size: 11.5px; }
+  svg .grouplabel { fill: var(--text-secondary); font-weight: 700; font-size: 11.5px; }
+  svg .barval { fill: var(--muted); font-size: 9.5px; }
   #tooltip { position: fixed; pointer-events: none; z-index: 10; display: none;
     background: var(--surface-1); border: 1px solid var(--border); border-radius: 8px;
     box-shadow: 0 4px 14px rgba(0,0,0,0.18); padding: 8px 11px; font-size: 12.5px; min-width: 150px; }
@@ -468,6 +482,72 @@ const DATA = __DATA__;
     const host = document.getElementById(cfg.hostId); if (host) host.appendChild(svg);
   }
 
+  // --- Shared tooltip helpers for the per-mark bar hover layer. ---
+  function moveTip(ev) {
+    const tw = tooltip.offsetWidth, th = tooltip.offsetHeight, pad = 14;
+    let left = ev.clientX + pad; if (left+tw > window.innerWidth-8) left = ev.clientX-tw-pad;
+    tooltip.style.left = left + "px";
+    tooltip.style.top = Math.max(8, Math.min(ev.clientY-10, window.innerHeight-th-8)) + "px";
+  }
+  function hideTip() { tooltip.style.display = "none"; }
+  function showBar(ev, workers, d, v, unit) {
+    tooltip.replaceChildren();
+    const title = document.createElement("div"); title.className = "tt-title";
+    title.textContent = workers + " workers"; tooltip.appendChild(title);
+    const row = document.createElement("div"); row.className = "tt-row";
+    row.appendChild(keySVG(d.st, 20, 11));
+    const val = document.createElement("span"); val.className = "tt-val";
+    val.textContent = fmtFull(v) + " " + unit;
+    const name = document.createElement("span"); name.className = "tt-name"; name.textContent = d.name;
+    row.append(val, name); tooltip.appendChild(row);
+    tooltip.style.display = "block"; moveTip(ev);
+  }
+
+  // Grouped horizontal bar chart: one group per worker count (512 at top down to
+  // 4 at the bottom), one colored bar per language inside each group, throughput
+  // along the x-axis with vertical gridlines and a value label at each bar tip.
+  function barChart(cfg) {
+    const T = cfg.T, N = T.length, S = cfg.seriesDefs.length;
+    const barH = 13, barGap = 2, groupGap = 18;
+    const bandH = S*barH + (S-1)*barGap;
+    const BW = 1120, BM = { l: 78, r: 118, t: 34, b: 30 };
+    const BIW = BW-BM.l-BM.r;
+    const BIH = N*bandH + (N-1)*groupGap;
+    const BH = BM.t + BIH + BM.b;
+    const X = v => BM.l + (v/cfg.yMax)*BIW;
+    const svg = el("svg", { viewBox: `0 0 ${BW} ${BH}`, role: "img", "aria-label": cfg.ariaLabel });
+    // Throughput gridlines with tick labels along the top.
+    const step = cfg.yMax/5;
+    for (let k=0;k<=5;k++){ const tv=step*k, x=X(tv);
+      svg.appendChild(el("line", { x1: x, x2: x, y1: BM.t, y2: BM.t+BIH, stroke: "var(--grid)", "stroke-width": 1 }));
+      const t = el("text", { x: x, y: BM.t-8, "text-anchor": "middle" }); t.textContent = tv===0?"0":fmt(tv); svg.appendChild(t); }
+    // Zero axis.
+    svg.appendChild(el("line", { x1: BM.l, x2: BM.l, y1: BM.t, y2: BM.t+BIH, stroke: "var(--baseline)", "stroke-width": 1 }));
+    // Groups, highest worker count on top down to lowest at the bottom.
+    const order = T.map((_,i)=>i).reverse();
+    order.forEach((ti, gi) => {
+      const bandTop = BM.t + gi*(bandH+groupGap);
+      const gl = el("text", { x: BM.l-12, y: bandTop+bandH/2+3.5, "text-anchor": "end", class: "grouplabel" });
+      gl.textContent = T[ti]; svg.appendChild(gl);
+      cfg.seriesDefs.forEach((d, j) => {
+        const v = d.vals[ti]; if (v==null) return;
+        const by = bandTop + j*(barH+barGap);
+        const w = Math.max(1, (v/cfg.yMax)*BIW);
+        const r = Math.min(4, w, barH/2);
+        const rect = el("rect", { x: BM.l, y: by, width: w, height: barH, rx: r, ry: r, fill: d.st.color });
+        if (d.st.dash) rect.setAttribute("fill-opacity", "0.55");
+        rect.style.cursor = "crosshair";
+        rect.addEventListener("pointerenter", ev => showBar(ev, T[ti], d, v, cfg.unit));
+        rect.addEventListener("pointermove", moveTip);
+        rect.addEventListener("pointerleave", hideTip);
+        svg.appendChild(rect);
+        const lab = el("text", { x: BM.l+w+5, y: by+barH/2+3.5, "text-anchor": "start", class: "barval" });
+        lab.textContent = fmt(v); svg.appendChild(lab);
+      });
+    });
+    const host = document.getElementById(cfg.hostId); if (host) host.appendChild(svg);
+  }
+
   for (const w of Object.keys(DATA.workloads)) {
     const M = DATA.workloads[w];
     const shown = M.series.filter(showSeries);
@@ -479,6 +559,12 @@ const DATA = __DATA__;
       hostId: `chart-w${w}`, T: M.threads, seriesDefs: defs,
       yMax: niceMax(peak), unit: M.unit,
       ariaLabel: `${M.title}: throughput by worker count`,
+    });
+    legendInto(`legend-w${w}-bars`, shown.map(s => ({ name: labelOf(s), key: keySVG(stOf(s), 26, 12) })));
+    barChart({
+      hostId: `chart-w${w}-bars`, T: M.threads, seriesDefs: defs,
+      yMax: niceMax(peak), unit: M.unit,
+      ariaLabel: `${M.title}: throughput grouped by worker count`,
     });
   }
 

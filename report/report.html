@@ -67,6 +67,8 @@
   .bigchart svg:focus { outline: 2px solid var(--cat-1); outline-offset: 2px; border-radius: 4px; }
   svg text { font-family: inherit; font-size: 10.5px; fill: var(--muted); font-variant-numeric: tabular-nums; }
   svg .seriesname { fill: var(--text-secondary); font-weight: 600; font-size: 11.5px; }
+  svg .grouplabel { fill: var(--text-secondary); font-weight: 700; font-size: 11.5px; }
+  svg .barval { fill: var(--muted); font-size: 9.5px; }
   #tooltip { position: fixed; pointer-events: none; z-index: 10; display: none;
     background: var(--surface-1); border: 1px solid var(--border); border-radius: 8px;
     box-shadow: 0 4px 14px rgba(0,0,0,0.18); padding: 8px 11px; font-size: 12.5px; min-width: 150px; }
@@ -135,6 +137,12 @@
 <tr><th scope="row">TypeScript</th><td class="num">104,817</td><td class="num">148,885</td><td class="num">142,176</td><td class="num">129,017</td><td class="num">115,548</td><td class="num">97,974</td><td class="num">87,963</td><td class="num">84,432</td></tr>
 </tbody></table></div></details>
   </section>
+  <section id="sec-w1-bars">
+    <h2>Workload 1 — integer insert — grouped by worker count</h2>
+    <p class="sub">Throughput (rows/s) per language, grouped by worker count (512 at top down to 4). Same colour and inner glyph per language as above.</p>
+    <div class="legend" id="legend-w1-bars"></div>
+    <div class="bigchart" id="chart-w1-bars"></div>
+  </section>
   <section id="sec-w2">
     <h2>Workload 2 — integer fetch + sum</h2>
     <p class="sub">Each worker fetches its single-int rows and sums them in application code. Throughput in rows/second.</p>
@@ -156,6 +164,12 @@
 <tr><th scope="row">Python</th><td class="num">1,537,244</td><td class="num">1,787,680</td><td class="num">1,899,900</td><td class="num">1,966,154</td><td class="num">1,984,127</td><td class="num">2,016,936</td><td class="num">2,027,182</td><td class="num">2,019,968</td></tr>
 <tr><th scope="row">Ruby</th><td class="num">92,577</td><td class="num">153,424</td><td class="num">154,327</td><td class="num">157,654</td><td class="num">149,042</td><td class="num">147,237</td><td class="num">143,884</td><td class="num">135,740</td></tr>
 </tbody></table></div></details>
+  </section>
+  <section id="sec-w2-bars">
+    <h2>Workload 2 — integer fetch + sum — grouped by worker count</h2>
+    <p class="sub">Throughput (rows/s) per language, grouped by worker count (512 at top down to 4). Same colour and inner glyph per language as above.</p>
+    <div class="legend" id="legend-w2-bars"></div>
+    <div class="bigchart" id="chart-w2-bars"></div>
   </section>
   <section id="sec-w3">
     <h2>Workload 3 — blob insert + MD5</h2>
@@ -179,6 +193,12 @@
 <tr><th scope="row">Python</th><td class="num">37</td><td class="num">37</td><td class="num">37</td><td class="num">39</td><td class="num">39</td><td class="num">42</td><td class="num">40</td><td class="num">40</td></tr>
 </tbody></table></div></details>
   </section>
+  <section id="sec-w3-bars">
+    <h2>Workload 3 — blob insert + MD5 — grouped by worker count</h2>
+    <p class="sub">Throughput (blobs/s) per language, grouped by worker count (512 at top down to 4). Same colour and inner glyph per language as above.</p>
+    <div class="legend" id="legend-w3-bars"></div>
+    <div class="bigchart" id="chart-w3-bars"></div>
+  </section>
   <section id="sec-w4">
     <h2>Workload 4 — blob read + MD5</h2>
     <p class="sub">Each worker reads its 1 MiB blobs and MD5s each in the app. Throughput in blobs/second.</p>
@@ -200,6 +220,12 @@
 <tr><th scope="row">JavaScript</th><td class="num">607</td><td class="num">982</td><td class="num">1,355</td><td class="num">1,680</td><td class="num">1,713</td><td class="num">1,432</td><td class="num">1,426</td><td class="num">1,602</td></tr>
 <tr><th scope="row">Ruby</th><td class="num">230</td><td class="num">234</td><td class="num">236</td><td class="num">240</td><td class="num">236</td><td class="num">232</td><td class="num">233</td><td class="num">229</td></tr>
 </tbody></table></div></details>
+  </section>
+  <section id="sec-w4-bars">
+    <h2>Workload 4 — blob read + MD5 — grouped by worker count</h2>
+    <p class="sub">Throughput (blobs/s) per language, grouped by worker count (512 at top down to 4). Same colour and inner glyph per language as above.</p>
+    <div class="legend" id="legend-w4-bars"></div>
+    <div class="bigchart" id="chart-w4-bars"></div>
   </section>
   <footer>
     Per-worker counts (work scales with worker count); barrier-synchronized timing;
@@ -378,6 +404,72 @@ const DATA = {"workloads":{"1":{"threads":[4,8,16,32,64,128,256,512],"series":[{
     const host = document.getElementById(cfg.hostId); if (host) host.appendChild(svg);
   }
 
+  // --- Shared tooltip helpers for the per-mark bar hover layer. ---
+  function moveTip(ev) {
+    const tw = tooltip.offsetWidth, th = tooltip.offsetHeight, pad = 14;
+    let left = ev.clientX + pad; if (left+tw > window.innerWidth-8) left = ev.clientX-tw-pad;
+    tooltip.style.left = left + "px";
+    tooltip.style.top = Math.max(8, Math.min(ev.clientY-10, window.innerHeight-th-8)) + "px";
+  }
+  function hideTip() { tooltip.style.display = "none"; }
+  function showBar(ev, workers, d, v, unit) {
+    tooltip.replaceChildren();
+    const title = document.createElement("div"); title.className = "tt-title";
+    title.textContent = workers + " workers"; tooltip.appendChild(title);
+    const row = document.createElement("div"); row.className = "tt-row";
+    row.appendChild(keySVG(d.st, 20, 11));
+    const val = document.createElement("span"); val.className = "tt-val";
+    val.textContent = fmtFull(v) + " " + unit;
+    const name = document.createElement("span"); name.className = "tt-name"; name.textContent = d.name;
+    row.append(val, name); tooltip.appendChild(row);
+    tooltip.style.display = "block"; moveTip(ev);
+  }
+
+  // Grouped horizontal bar chart: one group per worker count (512 at top down to
+  // 4 at the bottom), one colored bar per language inside each group, throughput
+  // along the x-axis with vertical gridlines and a value label at each bar tip.
+  function barChart(cfg) {
+    const T = cfg.T, N = T.length, S = cfg.seriesDefs.length;
+    const barH = 13, barGap = 2, groupGap = 18;
+    const bandH = S*barH + (S-1)*barGap;
+    const BW = 1120, BM = { l: 78, r: 118, t: 34, b: 30 };
+    const BIW = BW-BM.l-BM.r;
+    const BIH = N*bandH + (N-1)*groupGap;
+    const BH = BM.t + BIH + BM.b;
+    const X = v => BM.l + (v/cfg.yMax)*BIW;
+    const svg = el("svg", { viewBox: `0 0 ${BW} ${BH}`, role: "img", "aria-label": cfg.ariaLabel });
+    // Throughput gridlines with tick labels along the top.
+    const step = cfg.yMax/5;
+    for (let k=0;k<=5;k++){ const tv=step*k, x=X(tv);
+      svg.appendChild(el("line", { x1: x, x2: x, y1: BM.t, y2: BM.t+BIH, stroke: "var(--grid)", "stroke-width": 1 }));
+      const t = el("text", { x: x, y: BM.t-8, "text-anchor": "middle" }); t.textContent = tv===0?"0":fmt(tv); svg.appendChild(t); }
+    // Zero axis.
+    svg.appendChild(el("line", { x1: BM.l, x2: BM.l, y1: BM.t, y2: BM.t+BIH, stroke: "var(--baseline)", "stroke-width": 1 }));
+    // Groups, highest worker count on top down to lowest at the bottom.
+    const order = T.map((_,i)=>i).reverse();
+    order.forEach((ti, gi) => {
+      const bandTop = BM.t + gi*(bandH+groupGap);
+      const gl = el("text", { x: BM.l-12, y: bandTop+bandH/2+3.5, "text-anchor": "end", class: "grouplabel" });
+      gl.textContent = T[ti]; svg.appendChild(gl);
+      cfg.seriesDefs.forEach((d, j) => {
+        const v = d.vals[ti]; if (v==null) return;
+        const by = bandTop + j*(barH+barGap);
+        const w = Math.max(1, (v/cfg.yMax)*BIW);
+        const r = Math.min(4, w, barH/2);
+        const rect = el("rect", { x: BM.l, y: by, width: w, height: barH, rx: r, ry: r, fill: d.st.color });
+        if (d.st.dash) rect.setAttribute("fill-opacity", "0.55");
+        rect.style.cursor = "crosshair";
+        rect.addEventListener("pointerenter", ev => showBar(ev, T[ti], d, v, cfg.unit));
+        rect.addEventListener("pointermove", moveTip);
+        rect.addEventListener("pointerleave", hideTip);
+        svg.appendChild(rect);
+        const lab = el("text", { x: BM.l+w+5, y: by+barH/2+3.5, "text-anchor": "start", class: "barval" });
+        lab.textContent = fmt(v); svg.appendChild(lab);
+      });
+    });
+    const host = document.getElementById(cfg.hostId); if (host) host.appendChild(svg);
+  }
+
   for (const w of Object.keys(DATA.workloads)) {
     const M = DATA.workloads[w];
     const shown = M.series.filter(showSeries);
@@ -389,6 +481,12 @@ const DATA = {"workloads":{"1":{"threads":[4,8,16,32,64,128,256,512],"series":[{
       hostId: `chart-w${w}`, T: M.threads, seriesDefs: defs,
       yMax: niceMax(peak), unit: M.unit,
       ariaLabel: `${M.title}: throughput by worker count`,
+    });
+    legendInto(`legend-w${w}-bars`, shown.map(s => ({ name: labelOf(s), key: keySVG(stOf(s), 26, 12) })));
+    barChart({
+      hostId: `chart-w${w}-bars`, T: M.threads, seriesDefs: defs,
+      yMax: niceMax(peak), unit: M.unit,
+      ariaLabel: `${M.title}: throughput grouped by worker count`,
     });
   }
 
