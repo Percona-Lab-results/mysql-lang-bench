@@ -462,23 +462,6 @@ const PAGE_BARS = __PAGE_BARS__;
     const raw = range/ticks, p = Math.pow(10, Math.floor(Math.log10(raw))), f = raw/p;
     return (f<=1?1:f<=2?2:f<=2.5?2.5:f<=5?5:10)*p;
   }
-  // Readable text color (near-black or white) for a label drawn on top of a
-  // bar fill, picked from the fill's luminance. Resolves CSS vars once, cached.
-  const _barInk = {};
-  function barTextColor(colorVar, alpha) {
-    const key = colorVar + "@" + alpha;
-    if (!(key in _barInk)) {
-      const probe = document.createElement("span");
-      probe.style.cssText = "color:" + colorVar + ";display:none";
-      document.body.appendChild(probe);
-      const m = (getComputedStyle(probe).color.match(/\d+/g) || [0,0,0]).map(Number);
-      probe.remove();
-      let lum = (0.299*m[0] + 0.587*m[1] + 0.114*m[2]) / 255;
-      lum = alpha*lum + (1-alpha);   // faded bars blend toward the white surface
-      _barInk[key] = lum > 0.62 ? "#1a1a19" : "#ffffff";
-    }
-    return _barInk[key];
-  }
 
   function bigChart(cfg) {
     const T = cfg.T, N = T.length;
@@ -627,7 +610,7 @@ const PAGE_BARS = __PAGE_BARS__;
           lab = el("text", { x: endX+5, y: ty, "text-anchor": "start", class: "barval" });
         } else {                              // very long bar: label inside, right-aligned
           lab = el("text", { x: endX-6, y: ty, "text-anchor": "end", class: "barvalin" });
-          lab.setAttribute("fill", barTextColor(d.st.color, d.st.dash ? 0.55 : 1));
+          lab.setAttribute("fill", "#ffffff");
         }
         lab.textContent = txt; svg.appendChild(lab);
       });
