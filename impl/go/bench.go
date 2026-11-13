@@ -1,22 +1,37 @@
-// Go implementation of the v2 multithreaded oltp_read_write benchmark (SPEC.md).
+// Go implementation of the v3 four-micro-workload benchmark (SPEC.md).
 //
-// Workers are goroutines (Go's native concurrency unit); each takes a dedicated
-// session via db.Conn(ctx) and prepares its statements on that conn — no pool
-// sharing. BEGIN/COMMIT/ROLLBACK are plain queries (autocommit stays ON at the
-// session level); the 18 inner statements are server-side prepared
-// (interpolateParams=false, database/sql Prepare).
+// One of four workloads is selected by BENCH_WORKLOAD (1..4). BENCH_THREADS
+// workers run concurrently as goroutines; each worker owns a dedicated session
+// obtained via db.Conn(ctx) and prepares its statement on that conn — no pool
+// sharing. Statements are server-side prepared (interpolateParams=false).
+//
+//	WL1 int-insert  — prepared multi-row INSERT of BENCH_INT_BATCH rows, run
+//	                  BENCH_INT_ROWS/BENCH_INT_BATCH times in one transaction.
+//	WL2 int-fetch   — SELECT val FROM bench_int LIMIT ?, sum val in app code.
+//	WL3 blob-insert — fill BENCH_BLOB_SIZE random bytes, MD5 them, INSERT.
+//	WL4 blob-read   — SELECT data WHERE id = ?, MD5 each blob in app code.
+//
+// A start barrier (WaitGroup + closed channel) keeps connect/prepare out of the
+// timed window; main samples a monotonic clock around it. Per-operation latency
+// is collected in integer microseconds. If BENCH_PROGRESS_FILE is set, each
+// worker publishes its completed-operation count into a per-worker slot it alone
+// writes, and a monitor goroutine periodically sums the slots and rewrites the
+// partial-result file atomically (tmp + rename).
 package main
 
 import (
 	"context"
+	"crypto/md5"
 	"database/sql"
-	"errors"
+	"encoding/binary"
 	"fmt"
 	"os"
 	"runtime"
 	"sort"
 	"strconv"
+	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/go-sql-driver/mysql"
@@ -27,16 +42,29 @@ const driverVersion = "1.9.3"
 
 // ---- configuration, set in main() before any worker starts ----
 var (
-	tableRows     int64
-	threads       int
-	warmupTxns    int
-	txnsPerThread int
-	rangeSize     int64
-	seed          int64
-	duration      time.Duration // > 0 → duration mode; 0 → events mode
-	cVal          string        // "abcdefghij" x 12 (120 chars)
-	padVal        string        // "0123456789" x 6  (60 chars)
+	workload  int
+	threads   int
+	seed      int64
+	intRows   int64
+	intBatch  int64
+	blobCount int64
+	blobSize  int64
+
+	progressFile string
+	progressSec  int64
 )
+
+// workloadName / workloadUnit describe each workload for the JSON output.
+var workloadName = map[int]string{1: "int-insert", 2: "int-fetch", 3: "blob-insert", 4: "blob-read"}
+var workloadUnit = map[int]string{1: "rows/s", 2: "rows/s", 3: "blobs/s", 4: "blobs/s"}
+
+// progress[i] is worker i's completed-operation count (rows for WL1/2, blobs
+// for WL3/4). Worker i is the only writer; the monitor goroutine reads all.
+var progress []int64
+
+// globalSink keeps MD5 digests / summed values live so the compiler cannot
+// elide the work that produced them.
+var globalSink uint64
 
 func envStr(name string) string {
 	v, ok := os.LookupEnv(name)
@@ -57,7 +85,6 @@ func envInt(name string) int64 {
 	return n
 }
 
-// envIntDefault is envInt for an optional variable: def when unset.
 func envIntDefault(name string, def int64) int64 {
 	if _, ok := os.LookupEnv(name); !ok {
 		return def
@@ -65,17 +92,12 @@ func envIntDefault(name string, def int64) int64 {
 	return envInt(name)
 }
 
-func repeat(s string, times int) string {
-	out := ""
-	for i := 0; i < times; i++ {
-		out += s
-	}
-	return out
-}
-
 // p(x) = arr[ceil(x/100 * n) - 1], 0-based, array sorted ascending.
 func percentile(sorted []int64, x int) int64 {
 	n := len(sorted)
+	if n == 0 {
+		return 0
+	}
 	idx := (x*n+99)/100 - 1
 	if idx < 0 {
 		idx = 0
@@ -84,205 +106,229 @@ func percentile(sorted []int64, x int) int64 {
 }
 
 type worker struct {
-	idx       int
-	lcgState  uint64  // 31-bit LCG per SPEC.md, one independent stream per worker
-	latencies []int64 // integer microseconds; events mode: pre-allocated, one slot per timed txn; duration mode: appended to
-	retries   int64   // retryable-error count (timed window only; reset after warmup)
-
-	conn *sql.Conn
-
-	pointSel    *sql.Stmt
-	rangeSel    *sql.Stmt
-	sumSel      *sql.Stmt
-	orderSel    *sql.Stmt
-	distinctSel *sql.Stmt
-	idxUpd      *sql.Stmt
-	nonIdxUpd   *sql.Stmt
-	del         *sql.Stmt
-	ins         *sql.Stmt
+	idx   int
+	state uint64  // 31-bit LCG per SPEC.md, one independent stream per worker
+	lat   []int64 // per-operation latency samples, integer microseconds
+	rows  int64   // rows actually read (WL2) / inserted — for reported ops
+	conn  *sql.Conn
 }
 
-// rand returns a uniform value in 0..n-1 and advances the LCG.
-func (w *worker) rand(n int64) int64 {
-	w.lcgState = (w.lcgState*1103515245 + 12345) % (1 << 31)
-	return int64(w.lcgState % uint64(n))
+// next advances the 31-bit LCG and returns the new state.
+// state = (state*1103515245 + 12345) mod 2^31. (seed 42 worker 0 → 1250496027.)
+func (w *worker) next() uint32 {
+	w.state = (w.state*1103515245 + 12345) & 0x7fffffff
+	return uint32(w.state)
 }
 
-func (w *worker) fail(err error) {
-	fmt.Fprintf(os.Stderr, "worker %d error: %v\n", w.idx, err)
+func fail(idx int, err error) {
+	fmt.Fprintf(os.Stderr, "worker %d error: %v\n", idx, err)
 	os.Exit(1)
 }
 
-// fetchAll executes a prepared SELECT and fetches every returned row, scanning
-// the single column into sql.RawBytes. The result set is fully drained and
-// closed before returning — required before the next statement on this conn.
-func fetchAll(ctx context.Context, st *sql.Stmt, args ...any) error {
-	rows, err := st.QueryContext(ctx, args...)
+func (w *worker) prepare(ctx context.Context, query string) *sql.Stmt {
+	st, err := w.conn.PrepareContext(ctx, query)
 	if err != nil {
-		return err
+		fail(w.idx, err)
 	}
-	var v sql.RawBytes
+	return st
+}
+
+// publishProgress stores the worker's completed-operation count in its slot.
+func (w *worker) publishProgress(n int64) {
+	if progressFile != "" {
+		atomic.StoreInt64(&progress[w.idx], n)
+	}
+}
+
+// ---- workload 1: integer insert ----
+func (w *worker) runInsertInts(ctx context.Context) {
+	batches := intRows / intBatch
+	// Prepared multi-row INSERT with BENCH_INT_BATCH placeholders.
+	var b strings.Builder
+	b.WriteString("INSERT INTO bench_int (val) VALUES ")
+	for i := int64(0); i < intBatch; i++ {
+		if i > 0 {
+			b.WriteByte(',')
+		}
+		b.WriteString("(?)")
+	}
+	st := w.prepare(ctx, b.String())
+
+	w.lat = make([]int64, batches)
+	args := make([]any, intBatch)
+
+	// Autocommit ON: each multi-row INSERT is its own commit (no wrapping
+	// transaction) — identical commit strategy across all languages per SPEC.
+	var doneRows int64
+	for bi := int64(0); bi < batches; bi++ {
+		for j := int64(0); j < intBatch; j++ {
+			args[j] = int32(w.next())
+		}
+		t0 := time.Now()
+		if _, err := st.ExecContext(ctx, args...); err != nil {
+			fail(w.idx, err)
+		}
+		w.lat[bi] = time.Since(t0).Microseconds()
+		doneRows += intBatch
+		w.publishProgress(doneRows)
+	}
+	w.rows = batches * intBatch
+}
+
+// ---- workload 2: integer fetch + sum ----
+func (w *worker) runFetchInts(ctx context.Context) {
+	st := w.prepare(ctx, "SELECT val FROM bench_int LIMIT ?")
+	w.lat = make([]int64, 1)
+
+	t0 := time.Now()
+	rows, err := st.QueryContext(ctx, intRows)
+	if err != nil {
+		fail(w.idx, err)
+	}
+	var sum int64
+	var val int64
+	var n int64
 	for rows.Next() {
-		if err := rows.Scan(&v); err != nil {
+		if err := rows.Scan(&val); err != nil {
 			rows.Close()
-			return err
+			fail(w.idx, err)
+		}
+		sum += val
+		n++
+		if progressFile != "" && n%4096 == 0 {
+			w.publishProgress(n)
 		}
 	}
 	if err := rows.Err(); err != nil {
 		rows.Close()
-		return err
+		fail(w.idx, err)
 	}
-	return rows.Close()
+	if err := rows.Close(); err != nil {
+		fail(w.idx, err)
+	}
+	w.lat[0] = time.Since(t0).Microseconds()
+	w.rows = n
+	w.publishProgress(n)
+	atomic.AddUint64(&globalSink, uint64(sum))
 }
 
-// fetchSum is fetchAll for SELECT SUM(k): the DECIMAL (possibly NULL) result
-// is scanned into sql.NullString.
-func fetchSum(ctx context.Context, st *sql.Stmt, args ...any) error {
-	rows, err := st.QueryContext(ctx, args...)
-	if err != nil {
-		return err
+// ---- workload 3: blob insert + MD5 ----
+func (w *worker) runInsertBlobs(ctx context.Context) {
+	st := w.prepare(ctx, "INSERT INTO bench_blob (id, data) VALUES (?, ?)")
+	w.lat = make([]int64, blobCount)
+
+	// Fill the buffer ONCE per worker with a cheap bulk LCG fill (8 bytes per
+	// LCG step, compiled — not a per-byte interpreted loop). Each blob then
+	// overwrites the first 8 bytes with its id so every blob (and MD5) differs.
+	buf := make([]byte, blobSize)
+	for j := int64(0); j+8 <= blobSize; j += 8 {
+		// Advance the 31-bit LCG once, mix up to 64 bits, write 8 bytes.
+		x := uint64(w.next()) * 0x2545f4914f6cdd1d
+		binary.LittleEndian.PutUint64(buf[j:], x)
 	}
-	var v sql.NullString
-	for rows.Next() {
-		if err := rows.Scan(&v); err != nil {
+	if rem := blobSize % 8; rem != 0 { // tail when size isn't a multiple of 8
+		x := uint64(w.next()) * 0x2545f4914f6cdd1d
+		for j := blobSize - rem; j < blobSize; j++ {
+			buf[j] = byte(x)
+			x >>= 8
+		}
+	}
+
+	var sink uint64
+	for k := int64(0); k < blobCount; k++ {
+		id := int64(w.idx)*blobCount + k
+		binary.LittleEndian.PutUint64(buf[0:8], uint64(id))
+		digest := md5.Sum(buf)
+		for _, b := range digest {
+			sink ^= uint64(b)
+		}
+		t0 := time.Now()
+		if _, err := st.ExecContext(ctx, id, buf); err != nil {
+			fail(w.idx, err)
+		}
+		w.lat[k] = time.Since(t0).Microseconds()
+		w.publishProgress(k + 1)
+	}
+	w.rows = blobCount
+	atomic.AddUint64(&globalSink, sink)
+}
+
+// ---- workload 4: blob read + MD5 ----
+func (w *worker) runReadBlobs(ctx context.Context) {
+	st := w.prepare(ctx, "SELECT data FROM bench_blob WHERE id = ?")
+	w.lat = make([]int64, blobCount)
+	var sink uint64
+	for k := int64(0); k < blobCount; k++ {
+		id := int64(w.idx)*blobCount + k
+		t0 := time.Now()
+		rows, err := st.QueryContext(ctx, id)
+		if err != nil {
+			fail(w.idx, err)
+		}
+		var data []byte
+		for rows.Next() {
+			if err := rows.Scan(&data); err != nil {
+				rows.Close()
+				fail(w.idx, err)
+			}
+			digest := md5.Sum(data)
+			for _, b := range digest {
+				sink ^= uint64(b)
+			}
+		}
+		if err := rows.Err(); err != nil {
 			rows.Close()
-			return err
+			fail(w.idx, err)
 		}
-	}
-	if err := rows.Err(); err != nil {
-		rows.Close()
-		return err
-	}
-	return rows.Close()
-}
-
-// txnOnce runs one sysbench oltp_read_write transaction; values are drawn
-// immediately before executing each statement (draw order = execution order).
-func (w *worker) txnOnce(ctx context.Context) error {
-	if _, err := w.conn.ExecContext(ctx, "BEGIN"); err != nil {
-		return err
-	}
-
-	for i := 0; i < 10; i++ {
-		id := 1 + w.rand(tableRows)
-		if err := fetchAll(ctx, w.pointSel, id); err != nil {
-			return err
+		if err := rows.Close(); err != nil {
+			fail(w.idx, err)
 		}
+		w.lat[k] = time.Since(t0).Microseconds()
+		w.publishProgress(k + 1)
 	}
-
-	lo := 1 + w.rand(tableRows)
-	if err := fetchAll(ctx, w.rangeSel, lo, lo+rangeSize-1); err != nil {
-		return err
-	}
-
-	lo = 1 + w.rand(tableRows)
-	if err := fetchSum(ctx, w.sumSel, lo, lo+rangeSize-1); err != nil {
-		return err
-	}
-
-	lo = 1 + w.rand(tableRows)
-	if err := fetchAll(ctx, w.orderSel, lo, lo+rangeSize-1); err != nil {
-		return err
-	}
-
-	lo = 1 + w.rand(tableRows)
-	if err := fetchAll(ctx, w.distinctSel, lo, lo+rangeSize-1); err != nil {
-		return err
-	}
-
-	id := 1 + w.rand(tableRows)
-	if _, err := w.idxUpd.ExecContext(ctx, id); err != nil {
-		return err
-	}
-
-	id = 1 + w.rand(tableRows)
-	if _, err := w.nonIdxUpd.ExecContext(ctx, cVal, id); err != nil {
-		return err
-	}
-
-	id = 1 + w.rand(tableRows)
-	k := w.rand(tableRows)
-	if _, err := w.del.ExecContext(ctx, id); err != nil {
-		return err
-	}
-	if _, err := w.ins.ExecContext(ctx, id, k, cVal, padVal); err != nil {
-		return err
-	}
-
-	_, err := w.conn.ExecContext(ctx, "COMMIT")
-	return err
-}
-
-// runTxn runs one transaction, retrying on deadlock (1213), lock wait timeout
-// (1205) and duplicate key (1062) with all values redrawn (the PRNG stream
-// continues). Any other error aborts the whole benchmark.
-func (w *worker) runTxn(ctx context.Context) {
-	for {
-		err := w.txnOnce(ctx)
-		if err == nil {
-			return
-		}
-		var me *mysql.MySQLError
-		if errors.As(err, &me) && (me.Number == 1213 || me.Number == 1205 || me.Number == 1062) {
-			w.conn.ExecContext(ctx, "ROLLBACK") // rollback errors are ignored per spec
-			w.retries++
-			continue // re-run the whole transaction with fresh draws
-		}
-		w.fail(err)
-	}
+	w.rows = blobCount
+	atomic.AddUint64(&globalSink, sink)
 }
 
 func (w *worker) run(ctx context.Context, db *sql.DB, ready, done *sync.WaitGroup, start <-chan struct{}) {
 	var err error
 	w.conn, err = db.Conn(ctx) // dedicated session for this worker
 	if err != nil {
-		w.fail(err)
+		fail(w.idx, err)
 	}
-
-	prep := func(query string) *sql.Stmt {
-		st, err := w.conn.PrepareContext(ctx, query)
-		if err != nil {
-			w.fail(err)
-		}
-		return st
-	}
-	w.pointSel = prep("SELECT c FROM sbtest WHERE id = ?")
-	w.rangeSel = prep("SELECT c FROM sbtest WHERE id BETWEEN ? AND ?")
-	w.sumSel = prep("SELECT SUM(k) FROM sbtest WHERE id BETWEEN ? AND ?")
-	w.orderSel = prep("SELECT c FROM sbtest WHERE id BETWEEN ? AND ? ORDER BY c")
-	w.distinctSel = prep("SELECT DISTINCT c FROM sbtest WHERE id BETWEEN ? AND ? ORDER BY c")
-	w.idxUpd = prep("UPDATE sbtest SET k = k + 1 WHERE id = ?")
-	w.nonIdxUpd = prep("UPDATE sbtest SET c = ? WHERE id = ?")
-	w.del = prep("DELETE FROM sbtest WHERE id = ?")
-	w.ins = prep("INSERT INTO sbtest (id, k, c, pad) VALUES (?, ?, ?, ?)")
-
-	for i := 0; i < warmupTxns; i++ {
-		w.runTxn(ctx)
-	}
-	w.retries = 0 // reported retries cover the timed window only
 
 	ready.Done()
 	<-start // released together with main's t_start sample
 
-	if duration > 0 {
-		// Duration mode: deadline checked before each new transaction; a
-		// transaction in flight at the deadline (retries included) completes.
-		workerStart := time.Now()
-		for time.Since(workerStart) < duration {
-			t0 := time.Now()
-			w.runTxn(ctx)
-			w.latencies = append(w.latencies, time.Since(t0).Microseconds()) // truncated integer µs, retries included
-		}
-	} else {
-		for i := 0; i < txnsPerThread; i++ {
-			t0 := time.Now()
-			w.runTxn(ctx)
-			w.latencies[i] = time.Since(t0).Microseconds() // truncated integer µs, retries included
-		}
+	switch workload {
+	case 1:
+		w.runInsertInts(ctx)
+	case 2:
+		w.runFetchInts(ctx)
+	case 3:
+		w.runInsertBlobs(ctx)
+	case 4:
+		w.runReadBlobs(ctx)
 	}
 
 	w.conn.Close()
 	done.Done()
+}
+
+// writeProgress atomically overwrites progressFile with the partial result.
+func writeProgress(ops int64, elapsed float64) {
+	thr := 0.0
+	if elapsed > 0 {
+		thr = float64(ops) / elapsed
+	}
+	line := fmt.Sprintf(
+		`{"workload":%d,"workload_name":"%s","unit":"%s","threads":%d,"ops":%d,"elapsed_s":%.3f,"throughput":%.1f,"partial":true}`+"\n",
+		workload, workloadName[workload], workloadUnit[workload], threads, ops, elapsed, thr)
+	tmp := progressFile + ".tmp"
+	if err := os.WriteFile(tmp, []byte(line), 0o644); err != nil {
+		return // progress is best-effort; never fail the benchmark over it
+	}
+	os.Rename(tmp, progressFile)
 }
 
 func main() {
@@ -290,32 +336,43 @@ func main() {
 	port := envStr("MYSQL_PORT")
 	user := envStr("MYSQL_USER")
 	password := envStr("MYSQL_PASSWORD")
-	db := envStr("MYSQL_DB")
+	dbName := envStr("MYSQL_DB")
 
-	tableRows = envInt("BENCH_TABLE_ROWS")
+	workload = int(envInt("BENCH_WORKLOAD"))
 	threads = int(envInt("BENCH_THREADS"))
-	warmupTxns = int(envInt("BENCH_WARMUP_TXNS"))
-	txnsPerThread = int(envInt("BENCH_TXNS_PER_THREAD"))
-	rangeSize = envInt("BENCH_RANGE_SIZE")
 	seed = envInt("BENCH_SEED")
-	durationS := envIntDefault("BENCH_DURATION_S", 0) // 0 → events mode, > 0 → duration mode
-	if tableRows <= 0 || threads <= 0 || txnsPerThread <= 0 || warmupTxns < 0 || rangeSize <= 0 || durationS < 0 {
-		fmt.Fprintln(os.Stderr, "invalid workload configuration: BENCH_TABLE_ROWS, BENCH_THREADS, BENCH_TXNS_PER_THREAD, BENCH_RANGE_SIZE must be > 0 and BENCH_WARMUP_TXNS, BENCH_DURATION_S >= 0")
+	intRows = envIntDefault("BENCH_INT_ROWS", 1000000)
+	intBatch = envIntDefault("BENCH_INT_BATCH", 10)
+	blobCount = envIntDefault("BENCH_BLOB_COUNT", 100)
+	blobSize = envIntDefault("BENCH_BLOB_SIZE", 1048576)
+
+	progressFile = os.Getenv("BENCH_PROGRESS_FILE")
+	progressSec = envIntDefault("BENCH_PROGRESS_SEC", 5)
+
+	if workload < 1 || workload > 4 {
+		fmt.Fprintf(os.Stderr, "invalid BENCH_WORKLOAD %d: must be 1..4\n", workload)
 		os.Exit(1)
 	}
-	duration = time.Duration(durationS) * time.Second
+	if threads <= 0 || intRows <= 0 || intBatch <= 0 || blobCount <= 0 || blobSize <= 0 || progressSec <= 0 {
+		fmt.Fprintln(os.Stderr, "invalid workload configuration: BENCH_THREADS, BENCH_INT_ROWS, BENCH_INT_BATCH, BENCH_BLOB_COUNT, BENCH_BLOB_SIZE, BENCH_PROGRESS_SEC must be > 0")
+		os.Exit(1)
+	}
+	if (workload == 1) && intRows%intBatch != 0 {
+		fmt.Fprintf(os.Stderr, "BENCH_INT_ROWS (%d) must be a multiple of BENCH_INT_BATCH (%d)\n", intRows, intBatch)
+		os.Exit(1)
+	}
+	if (workload == 3 || workload == 4) && blobSize < 8 {
+		fmt.Fprintf(os.Stderr, "BENCH_BLOB_SIZE (%d) must be >= 8\n", blobSize)
+		os.Exit(1)
+	}
 
-	cVal = repeat("abcdefghij", 12)
-	padVal = repeat("0123456789", 6)
-
-	// TCP, TLS disabled (TLSConfig empty = none), server-side prepared
-	// statements (InterpolateParams=false); loc/charset left at driver defaults.
+	// TCP, TLS disabled, server-side prepared statements.
 	cfg := mysql.NewConfig()
 	cfg.Net = "tcp"
 	cfg.Addr = host + ":" + port
 	cfg.User = user
 	cfg.Passwd = password
-	cfg.DBName = db
+	cfg.DBName = dbName
 	cfg.InterpolateParams = false
 	cfg.TLSConfig = "false"
 
@@ -334,41 +391,70 @@ func main() {
 	done.Add(threads)
 	start := make(chan struct{})
 
+	progress = make([]int64, threads)
 	workers := make([]*worker, threads)
 	for i := 0; i < threads; i++ {
-		latencies := make([]int64, txnsPerThread) // events mode: one slot per timed txn
-		if duration > 0 {
-			latencies = make([]int64, 0, 4096) // duration mode: grows by append
-		}
-		workers[i] = &worker{
-			idx:       i,
-			lcgState:  uint64(seed + int64(i)), // worker i seeds with BENCH_SEED + i
-			latencies: latencies,
-		}
+		workers[i] = &worker{idx: i, state: uint64(seed + int64(i))}
 		go workers[i].run(ctx, pool, &ready, &done, start)
 	}
 
-	ready.Wait() // all workers connected, prepared, warmed up
+	ready.Wait() // all workers connected and prepared
 	tStart := time.Now()
 	close(start)
+
+	// Progress monitor: sum the per-worker slots on a timer and rewrite the
+	// partial-result file atomically until the workers finish.
+	var monitorDone chan struct{}
+	if progressFile != "" {
+		monitorDone = make(chan struct{})
+		go func() {
+			ticker := time.NewTicker(time.Duration(progressSec) * time.Second)
+			defer ticker.Stop()
+			for {
+				select {
+				case <-monitorDone:
+					return
+				case <-ticker.C:
+					var ops int64
+					for i := range progress {
+						ops += atomic.LoadInt64(&progress[i])
+					}
+					writeProgress(ops, time.Since(tStart).Seconds())
+				}
+			}
+		}()
+	}
+
 	done.Wait()
 	elapsed := time.Since(tStart)
-
-	txns := 0 // events mode: threads*txnsPerThread; duration mode: actual committed timed txns
-	for _, w := range workers {
-		txns += len(w.latencies)
+	if progressFile != "" {
+		close(monitorDone)
 	}
-	all := make([]int64, 0, txns)
-	var totalRetries int64
+
+	// Merge latency samples, sort, compute percentiles.
+	total := 0
+	var ops int64
 	for _, w := range workers {
-		all = append(all, w.latencies...)
-		totalRetries += w.retries
+		total += len(w.lat)
+		ops += w.rows
+	}
+	all := make([]int64, 0, total)
+	for _, w := range workers {
+		all = append(all, w.lat...)
 	}
 	sort.Slice(all, func(i, j int) bool { return all[i] < all[j] })
 
 	elapsedS := elapsed.Seconds()
-	tps := float64(txns) / elapsedS
-	qps := tps * 20.0 // 18 statements + BEGIN + COMMIT, sysbench counting
+	throughput := 0.0
+	if elapsedS > 0 {
+		throughput = float64(ops) / elapsedS
+	}
+	mbPerS := 0.0
+	if workload == 3 || workload == 4 {
+		if elapsedS > 0 {
+			mbPerS = float64(ops) * float64(blobSize) / 1e6 / elapsedS
+		}
+	}
 
 	clientHost, err := os.Hostname()
 	if err != nil || clientHost == "" {
@@ -376,9 +462,15 @@ func main() {
 	}
 
 	fmt.Fprintf(os.Stdout,
-		`{"lang":"go","driver":"go-sql-driver/mysql","driver_version":"%s","runtime_version":"%s","prepared":true,"client_host":"%s","db_host":"%s","threads":%d,"txns":%d,"retries":%d,"errors":0,"elapsed_s":%.3f,"tps":%.1f,"qps":%.1f,"p50_us":%d,"p95_us":%d,"p99_us":%d,"max_us":%d}`+"\n",
+		`{"lang":"go","workload":%d,"workload_name":"%s","unit":"%s","driver":"go-sql-driver/mysql","driver_version":"%s","runtime_version":"%s","prepared":true,"client_host":"%s","db_host":"%s","threads":%d,"ops":%d,"errors":0,"elapsed_s":%.3f,"throughput":%.1f,"mb_per_s":%.1f,"p50_us":%d,"p95_us":%d,"p99_us":%d,"max_us":%d,"client_cpu_s":0,"server_cpu_s":0}`+"\n",
+		workload, workloadName[workload], workloadUnit[workload],
 		driverVersion, runtime.Version(), clientHost, host,
-		threads, txns, totalRetries,
-		elapsedS, tps, qps,
-		percentile(all, 50), percentile(all, 95), percentile(all, 99), all[len(all)-1])
+		threads, ops, elapsedS, throughput, mbPerS,
+		percentile(all, 50), percentile(all, 95), percentile(all, 99), percentile(all, 100))
+
+	// Success: the partial-result file is superseded by the stdout JSON.
+	if progressFile != "" {
+		os.Remove(progressFile)
+	}
+	_ = atomic.LoadUint64(&globalSink)
 }

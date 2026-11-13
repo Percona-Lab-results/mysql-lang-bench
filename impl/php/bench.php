@@ -1,21 +1,34 @@
 <?php
-// MySQL language benchmark - PHP implementation (v2: sysbench oltp_read_write-style).
-// mysqli + server-side prepared statements; BENCH_THREADS workers as forked
-// processes (pcntl_fork) since PHP has no threads. See SPEC.md.
+// MySQL language benchmark - PHP implementation (v3: four micro-workloads).
+//
+// mysqli + server-side prepared statements. PHP has no threads, so the
+// BENCH_THREADS workers are forked processes (pcntl_fork); every child owns its
+// own connection (created AFTER the fork, per SPEC) and its own 31-bit LCG PRNG
+// seeded BENCH_SEED + worker_index. A UNIX stream socketpair per child is the
+// start barrier. Each child writes its per-op latencies (integer microseconds,
+// one per line) to a temp file; the parent merges them and prints one JSON line.
 //
 // Parent/child protocol:
 //   - a per-worker UNIX stream socketpair is created before each fork;
-//   - the child connects to MySQL (connections are created only AFTER fork),
-//     prepares statements, runs warmup txns, writes "R" (ready) to its socket
-//     and blocks reading one byte (the start barrier);
+//   - the child connects, prepares its statement(s), writes "R" (ready) to its
+//     socket and blocks reading one byte (the start barrier);
 //   - the parent waits for all "R" bytes, samples t_start, writes "S" to every
-//     child, waits for all children, samples t_end;
-//   - each child writes its latencies (one integer microsecond value per line)
-//     plus a final "retries=<n>" line to $TMPDIR/bench-php-<pid>.result;
-//     the parent merges those files and prints the single JSON result line.
+//     child, then waits for all children (non-blocking waitpid + poll when
+//     progress is enabled, blocking waitpid otherwise), samples t_end;
+//   - each child writes its latencies to sys_get_temp_dir()/bench-php-<pid>.result
+//     and the parent merges those files into the single JSON result line.
+//
+// Intermediate progress (SPEC "Intermediate progress"): when BENCH_PROGRESS_FILE
+// is set, each child writes its completed-op count to a per-child temp
+// (BENCH_PROGRESS_FILE.w<i>) roughly every BENCH_PROGRESS_SEC seconds; the parent
+// polls, sums the child temps and atomically rewrites BENCH_PROGRESS_FILE with a
+// partial JSON line. On success the parent deletes BENCH_PROGRESS_FILE and the
+// child temps; on failure it leaves BENCH_PROGRESS_FILE behind for recovery.
 
-mysqli_report(MYSQLI_REPORT_ERROR | MYSQLI_REPORT_STRICT);
+mysqli_report(MYSQLI_REPORT_ERROR | MYSQLI_REPORT_STRICT); // SQL errors -> exceptions
+ini_set('memory_limit', '-1'); // the parent may merge tens of millions of latency samples
 
+// ---- env helpers ----
 function env_str(string $name): string {
     $v = getenv($name);
     if ($v === false || $v === '') {
@@ -37,7 +50,8 @@ function env_int_opt(string $name, int $default): int {
 }
 
 // ---- PRNG: 31-bit LCG. One independent stream per worker process: the child
-// seeds this with BENCH_SEED + worker_index after the fork. ----
+// seeds this with BENCH_SEED + worker_index after the fork.
+// Validation (seed 42, worker 0): first next() = 1250496027. ----
 $lcg_state = 0;
 
 function lcg_next(): int {
@@ -47,173 +61,243 @@ function lcg_next(): int {
     return $lcg_state;
 }
 
-function lcg_rand(int $n): int {
-    return lcg_next() % $n;
-}
+// ---- workload metadata: [workload_name, unit] ----
+const WL_META = [
+    1 => ['int-insert',  'rows/s'],
+    2 => ['int-read',    'rows/s'],
+    3 => ['blob-insert', 'blobs/s'],
+    4 => ['blob-read',   'blobs/s'],
+];
+
+// Black-box sink: workloads feed computed results here so they are not dead code.
+$g_sink = 0;
 
 function result_file_path(int $pid): string {
     return sys_get_temp_dir() . '/bench-php-' . $pid . '.result';
 }
 
+// Atomically publish a child's completed-op count (write tmp, rename over FILE).
+function write_child_progress(string $path, int $count): void {
+    $tmp = $path . '.tmp';
+    if (@file_put_contents($tmp, (string) $count) !== false) {
+        @rename($tmp, $path);
+    }
+}
+
 // ---- Worker body: runs in the forked child only. ----
-function worker_main(int $workerIdx, $sock, array $cfg): void {
-    global $lcg_state;
-    $lcg_state = $cfg['seed'] + $workerIdx;
+function worker_main(int $idx, $sock, array $cfg): void {
+    global $lcg_state, $g_sink;
+    $lcg_state = $cfg['seed'] + $idx;
 
-    $N = $cfg['tableRows'];
-    $R = $cfg['rangeSize'];
-    $cVal = str_repeat('abcdefghij', 12);   // 120 chars
-    $padVal = str_repeat('0123456789', 6);  // 60 chars
+    $W = $cfg['workload'];
+    $progress = $cfg['progressFile'] !== '';
+    $childProg = $progress ? $cfg['progressFile'] . '.w' . $idx : '';
+    $intervalNs = $cfg['progressSec'] * 1000000000;
 
-    // Connection (child only, after fork): TCP, autocommit ON (default),
-    // explicit BEGIN/COMMIT as plain queries.
+    // Connection (child only, after fork): TCP, autocommit ON (mysqli default).
     $conn = new mysqli($cfg['host'], $cfg['user'], $cfg['password'], $cfg['db'], $cfg['port']);
 
-    // The 18 inner statements of the transaction, server-side prepared once per
-    // worker (9 distinct statement handles; the point select runs 10x per txn).
-    $pointStmt    = $conn->prepare('SELECT c FROM sbtest WHERE id = ?');
-    $rangeStmt    = $conn->prepare('SELECT c FROM sbtest WHERE id BETWEEN ? AND ?');
-    $sumStmt      = $conn->prepare('SELECT SUM(k) FROM sbtest WHERE id BETWEEN ? AND ?');
-    $orderStmt    = $conn->prepare('SELECT c FROM sbtest WHERE id BETWEEN ? AND ? ORDER BY c');
-    $distinctStmt = $conn->prepare('SELECT DISTINCT c FROM sbtest WHERE id BETWEEN ? AND ? ORDER BY c');
-    $idxUpdStmt   = $conn->prepare('UPDATE sbtest SET k = k + 1 WHERE id = ?');
-    $cUpdStmt     = $conn->prepare('UPDATE sbtest SET c = ? WHERE id = ?');
-    $delStmt      = $conn->prepare('DELETE FROM sbtest WHERE id = ?');
-    $insStmt      = $conn->prepare('INSERT INTO sbtest (id, k, c, pad) VALUES (?, ?, ?, ?)');
-
-    // bind_param binds by reference: bind once, mutate the variables per draw.
-    $pointId = 0; $lo = 0; $hi = 0; $updId = 0; $cUpdId = 0; $delId = 0; $insK = 0;
-    $pointStmt->bind_param('i', $pointId);
-    $rangeStmt->bind_param('ii', $lo, $hi);
-    $sumStmt->bind_param('ii', $lo, $hi);
-    $orderStmt->bind_param('ii', $lo, $hi);
-    $distinctStmt->bind_param('ii', $lo, $hi);
-    $idxUpdStmt->bind_param('i', $updId);
-    $cUpdStmt->bind_param('si', $cVal, $cUpdId);
-    $delStmt->bind_param('i', $delId);
-    $insStmt->bind_param('iiss', $delId, $insK, $cVal, $padVal);
-
-    // Execute a SELECT and fetch all returned rows.
-    $fetchAll = function (mysqli_stmt $stmt): void {
-        $stmt->execute();
-        $res = $stmt->get_result();
-        while ($res->fetch_row()) {
-            // row arrays are non-empty and therefore truthy; null ends the loop
-        }
-        $res->free();
-    };
-
-    // One attempt at the sysbench oltp_read_write transaction. Values are
-    // drawn immediately before executing each statement (draw order =
-    // execution order); a retry redraws everything (the PRNG stream continues).
-    $runTxnOnce = function () use (
-        $conn, $fetchAll,
-        $pointStmt, $rangeStmt, $sumStmt, $orderStmt, $distinctStmt,
-        $idxUpdStmt, $cUpdStmt, $delStmt, $insStmt,
-        &$pointId, &$lo, &$hi, &$updId, &$cUpdId, &$delId, &$insK,
-        $N, $R
-    ): void {
-        $conn->query('BEGIN');
-        for ($s = 0; $s < 10; $s++) {           // 10 x point select
-            $pointId = 1 + lcg_rand($N);
-            $fetchAll($pointStmt);
-        }
-        $lo = 1 + lcg_rand($N); $hi = $lo + $R - 1;  // simple range
-        $fetchAll($rangeStmt);
-        $lo = 1 + lcg_rand($N); $hi = $lo + $R - 1;  // sum range
-        $fetchAll($sumStmt);
-        $lo = 1 + lcg_rand($N); $hi = $lo + $R - 1;  // order range
-        $fetchAll($orderStmt);
-        $lo = 1 + lcg_rand($N); $hi = $lo + $R - 1;  // distinct range
-        $fetchAll($distinctStmt);
-        $updId = 1 + lcg_rand($N);                   // index update
-        $idxUpdStmt->execute();
-        $cUpdId = 1 + lcg_rand($N);                  // non-index update
-        $cUpdStmt->execute();
-        $delId = 1 + lcg_rand($N);                   // delete + insert (same id)
-        $delStmt->execute();
-        $insK = lcg_rand($N);
-        $insStmt->execute();
-        $conn->query('COMMIT');
-    };
-
-    // Retry wrapper: deadlock (1213), lock wait timeout (1205) and duplicate
-    // key (1062) anywhere in the transaction (COMMIT included) roll back,
-    // count a retry and re-run the whole transaction with fresh draws.
-    $retries = 0;
-    $runTxn = function () use ($conn, $runTxnOnce, &$retries): void {
-        while (true) {
-            try {
-                $runTxnOnce();
-                return;
-            } catch (mysqli_sql_exception $e) {
-                if (!in_array($e->getCode(), [1213, 1205, 1062], true)) {
-                    throw $e;
-                }
-                try {
-                    $conn->query('ROLLBACK');
-                } catch (Throwable $ignored) {
-                    // rollback errors are ignored per SPEC
-                }
-                $retries++;
+    // ---- Prepare statement(s) for this workload (outside the timed window). ----
+    switch ($W) {
+        case 1:
+            $batch = $cfg['intBatch'];
+            $sql = 'INSERT INTO bench_int (val) VALUES '
+                 . implode(',', array_fill(0, $batch, '(?)'));
+            $stmt = $conn->prepare($sql);
+            // bind_param binds by reference: bind once, mutate per execute. The
+            // reference array is the documented way to bind N dynamic params.
+            $vals = array_fill(0, $batch, 0);
+            $bindArgs = [str_repeat('i', $batch)];
+            for ($k = 0; $k < $batch; $k++) {
+                $bindArgs[] = &$vals[$k];
             }
-        }
-    };
-
-    // Warmup (untimed, before the barrier).
-    for ($w = 0; $w < $cfg['warmupTxns']; $w++) {
-        $runTxn();
+            call_user_func_array([$stmt, 'bind_param'], $bindArgs);
+            break;
+        case 2:
+            // LIMIT takes a config integer (not user input): embed it literally.
+            $stmt = $conn->prepare('SELECT val FROM bench_int LIMIT ' . (int) $cfg['intRows']);
+            break;
+        case 3:
+            $stmt = $conn->prepare('INSERT INTO bench_blob (id, data) VALUES (?, ?)');
+            $id = 0;
+            $data = '';
+            $stmt->bind_param('is', $id, $data);
+            break;
+        case 4:
+            $stmt = $conn->prepare('SELECT data FROM bench_blob WHERE id = ?');
+            $id = 0;
+            $stmt->bind_param('i', $id);
+            break;
+        default:
+            throw new RuntimeException("invalid BENCH_WORKLOAD: $W");
     }
-    $retries = 0; // report retries from the timed window only
 
-    // Barrier: signal ready, then block until the parent sends the start byte.
+    // ---- Barrier: signal ready, block until the parent sends the start byte. ----
     if (fwrite($sock, 'R') !== 1) {
         throw new RuntimeException('failed to write ready byte to parent');
     }
-    $start = fread($sock, 1); // blocking read: this is the barrier
+    $start = fread($sock, 1); // blocking read: this is the start barrier
     if ($start !== 'S') {
         throw new RuntimeException('did not receive start signal from parent');
     }
 
-    // Timed run: per-txn latency in integer microseconds (truncated), from
-    // just before the first BEGIN to after the successful COMMIT, retries
-    // included.
-    if ($cfg['durationS'] > 0) {
-        // Duration mode: run until start + BENCH_DURATION_S, checking the
-        // deadline BEFORE each new transaction (an in-flight transaction,
-        // retries included, completes). Latency storage grows dynamically.
-        $latencies = [];
-        $startNs = hrtime(true);
-        $deadlineNs = $startNs + $cfg['durationS'] * 1000000000;
-        while (hrtime(true) < $deadlineNs) {
+    // ---- Timed run. One latency sample (integer microseconds) per DB op. ----
+    $latencies = [];
+    $completed = 0;
+    $nextProg = $progress ? hrtime(true) + $intervalNs : PHP_INT_MAX;
+
+    switch ($W) {
+        case 1: // integer insert: prepared multi-row INSERT, BATCH rows each.
+            // Autocommit ON (mysqli default): each INSERT is its own commit; no
+            // wrapping BEGIN/COMMIT. Same commit strategy in every language.
+            $batch = $cfg['intBatch'];
+            $iters = intdiv($cfg['intRows'], $batch);
+            for ($it = 0; $it < $iters; $it++) {
+                for ($k = 0; $k < $batch; $k++) {
+                    // next() is 0..2^31-1, i.e. already a valid signed 32-bit int.
+                    $vals[$k] = lcg_next();
+                }
+                $t0 = hrtime(true);
+                $stmt->execute();
+                $latencies[] = intdiv(hrtime(true) - $t0, 1000);
+                $completed += $batch;
+                if ($progress && hrtime(true) >= $nextProg) {
+                    write_child_progress($childProg, $completed);
+                    $nextProg += $intervalNs;
+                }
+            }
+            break;
+
+        case 2: // integer fetch + sum: whole scan is one latency sample.
+            $sum = 0; // 64-bit accumulator
+            $cnt = 0;
             $t0 = hrtime(true);
-            $runTxn();
+            $stmt->execute();
+            $res = $stmt->get_result();
+            while (($row = $res->fetch_row()) !== null) {
+                $sum += (int) $row[0];
+                $cnt++;
+                // Progress reflects rows read; check the clock sparsely.
+                if ($progress && ($cnt & 0xFFFF) === 0 && hrtime(true) >= $nextProg) {
+                    write_child_progress($childProg, $cnt);
+                    $nextProg += $intervalNs;
+                }
+            }
+            $res->free();
             $latencies[] = intdiv(hrtime(true) - $t0, 1000);
-        }
-    } else {
-        // Events mode: exactly BENCH_TXNS_PER_THREAD transactions, latency
-        // array pre-allocated.
-        $txns = $cfg['txnsPerThread'];
-        $latencies = array_fill(0, $txns, 0);
-        for ($t = 0; $t < $txns; $t++) {
-            $t0 = hrtime(true);
-            $runTxn();
-            $latencies[$t] = intdiv(hrtime(true) - $t0, 1000);
-        }
+            $g_sink += $sum; // consume
+            if ($progress) {
+                write_child_progress($childProg, $cnt);
+            }
+            break;
+
+        case 3: // blob insert + MD5: one buffer per worker, MD5 into sink, prepared INSERT.
+            // Autocommit ON (mysqli default): each blob INSERT is its own commit.
+            // Content must NOT be a per-byte interpreted loop: build one random
+            // buffer once via a fast native facility, then before each blob
+            // overwrite its first 8 bytes with the blob id so every blob (and
+            // its MD5) differs; MD5 still hashes the full buffer each time.
+            $count = $cfg['blobCount'];
+            $size = $cfg['blobSize'];
+            $data = $size > 0 ? random_bytes($size) : '';
+            $idBytes = $size >= 8 ? 8 : $size; // bytes of id to stamp (buffer may be tiny)
+            for ($k = 0; $k < $count; $k++) {
+                $id = $idx * $count + $k;         // contiguous per-worker id range
+                if ($idBytes > 0) {
+                    // 8-byte little-endian id stamped over the buffer's head.
+                    $data = substr_replace($data, substr(pack('P', $id), 0, $idBytes), 0, $idBytes);
+                }
+                $digest = md5($data, true);       // MD5 of the whole buffer, in app code
+                $g_sink ^= ord($digest[0]);       // consume the digest
+                $t0 = hrtime(true);
+                $stmt->execute();
+                $latencies[] = intdiv(hrtime(true) - $t0, 1000);
+                $completed++;
+                if ($progress && hrtime(true) >= $nextProg) {
+                    write_child_progress($childProg, $completed);
+                    $nextProg += $intervalNs;
+                }
+            }
+            break;
+
+        case 4: // blob read + MD5: fetch own blobs by id, MD5 the content.
+            $count = $cfg['blobCount'];
+            for ($k = 0; $k < $count; $k++) {
+                $id = $idx * $count + $k;
+                $t0 = hrtime(true);
+                $stmt->execute();
+                $res = $stmt->get_result();
+                $row = $res->fetch_row();
+                $res->free();
+                $latencies[] = intdiv(hrtime(true) - $t0, 1000);
+                if ($row === null) {
+                    throw new RuntimeException("missing blob id=$id");
+                }
+                $digest = md5($row[0], true);     // MD5 of the content, in app code
+                $g_sink ^= ord($digest[0]);       // consume the digest
+                $completed++;
+                if ($progress && hrtime(true) >= $nextProg) {
+                    write_child_progress($childProg, $completed);
+                    $nextProg += $intervalNs;
+                }
+            }
+            break;
     }
 
     $conn->close();
 
+    // Force the sink to be observable so the compiler/optimizer cannot elide it.
+    if ($g_sink === PHP_INT_MIN) {
+        fwrite(STDERR, "sink=$g_sink\n");
+    }
+
     $path = result_file_path(getmypid());
-    $out = implode("\n", $latencies) . "\nretries=" . $retries . "\n";
-    if (file_put_contents($path, $out) === false) {
+    if (file_put_contents($path, implode("\n", $latencies) . "\n") === false) {
         throw new RuntimeException("failed to write result file: $path");
     }
 }
 
+// ---- Parent: atomically rewrite BENCH_PROGRESS_FILE with a partial result. ----
+function write_parent_progress(array $cfg, int $W, int $threads, int $tStartNs, int $nowNs): void {
+    $opsSoFar = 0;
+    for ($i = 0; $i < $threads; $i++) {
+        $c = @file_get_contents($cfg['progressFile'] . '.w' . $i);
+        if ($c !== false) {
+            $opsSoFar += (int) $c;
+        }
+    }
+    $elapsed = ($nowNs - $tStartNs) / 1e9;
+    $thr = $elapsed > 0 ? $opsSoFar / $elapsed : 0.0;
+    $line = json_encode([
+        'workload' => $W,
+        'workload_name' => WL_META[$W][0],
+        'unit' => WL_META[$W][1],
+        'threads' => $threads,
+        'ops' => $opsSoFar,
+        'elapsed_s' => round($elapsed, 3),
+        'throughput' => round($thr, 1),
+        'partial' => true,
+    ], JSON_PRESERVE_ZERO_FRACTION);
+    $tmp = $cfg['progressFile'] . '.parent.tmp';
+    if (@file_put_contents($tmp, $line . "\n") !== false) {
+        @rename($tmp, $cfg['progressFile']);
+    }
+}
+
+function cleanup_progress_temps(array $cfg, int $threads): void {
+    if ($cfg['progressFile'] === '') {
+        return;
+    }
+    for ($i = 0; $i < $threads; $i++) {
+        @unlink($cfg['progressFile'] . '.w' . $i);
+        @unlink($cfg['progressFile'] . '.w' . $i . '.tmp');
+    }
+    @unlink($cfg['progressFile'] . '.parent.tmp');
+}
+
 try {
     if (!function_exists('pcntl_fork')) {
-        throw new RuntimeException('pcntl extension missing: install it (e.g. apt install php-cli with pcntl enabled)');
+        throw new RuntimeException('pcntl extension missing: needed for forked workers (install php-cli with pcntl enabled)');
     }
 
     // ---- Configuration (environment only; no CLI arguments) ----
@@ -228,20 +312,39 @@ try {
         'user' => env_str('MYSQL_USER'),
         'password' => $password,
         'db' => env_str('MYSQL_DB'),
-        'tableRows' => env_int('BENCH_TABLE_ROWS'),
-        'rangeSize' => env_int('BENCH_RANGE_SIZE'),
-        'warmupTxns' => env_int('BENCH_WARMUP_TXNS'),
-        'txnsPerThread' => env_int('BENCH_TXNS_PER_THREAD'),
-        'durationS' => env_int_opt('BENCH_DURATION_S', 0), // 0 = events mode, >0 = duration mode
+        'workload' => env_int('BENCH_WORKLOAD'),
         'seed' => env_int('BENCH_SEED'),
+        'intRows' => env_int_opt('BENCH_INT_ROWS', 1000000),
+        'intBatch' => env_int_opt('BENCH_INT_BATCH', 10),
+        'blobCount' => env_int_opt('BENCH_BLOB_COUNT', 100),
+        'blobSize' => env_int_opt('BENCH_BLOB_SIZE', 1048576),
+        'progressFile' => (string) (getenv('BENCH_PROGRESS_FILE') ?: ''),
+        'progressSec' => max(1, env_int_opt('BENCH_PROGRESS_SEC', 5)),
     ];
+
+    $W = $cfg['workload'];
+    if ($W < 1 || $W > 4) {
+        throw new RuntimeException("BENCH_WORKLOAD must be 1..4, got $W");
+    }
+    if ($cfg['intBatch'] < 1) {
+        throw new RuntimeException('BENCH_INT_BATCH must be >= 1');
+    }
     $threads = env_int('BENCH_THREADS');
     if ($threads < 1) {
         throw new RuntimeException('BENCH_THREADS must be >= 1');
     }
 
+    $progress = $cfg['progressFile'] !== '';
+    $intervalNs = $cfg['progressSec'] * 1000000000;
+
     if (function_exists('pcntl_signal')) {
         pcntl_signal(SIGPIPE, SIG_IGN); // a dead child must not kill the parent
+    }
+
+    // Remove any stale progress artifacts from a previous run before we start.
+    if ($progress) {
+        @unlink($cfg['progressFile']);
+        cleanup_progress_temps($cfg, $threads);
     }
 
     // ---- Fork workers. Each worker's socketpair is created before its fork;
@@ -290,6 +393,7 @@ try {
                 pcntl_waitpid($p, $status);
                 @unlink(result_file_path($p));
             }
+            cleanup_progress_temps($cfg, $threads);
             exit(1);
         }
     }
@@ -300,13 +404,29 @@ try {
         @fwrite($s, 'S'); // a failed write means a dead child; waitpid catches it
     }
 
-    // ---- Join all workers, then sample t_end. ----
-    $failed = false;
-    foreach ($pids as $i => $p) {
-        pcntl_waitpid($p, $status);
-        if (!pcntl_wifexited($status) || pcntl_wexitstatus($status) !== 0) {
-            fwrite(STDERR, "php worker $i exited abnormally\n");
-            $failed = true;
+    // ---- Join all workers, then sample t_end. With progress enabled the parent
+    // polls (non-blocking waitpid + sleep) and rewrites the progress file every
+    // ~BENCH_PROGRESS_SEC s; otherwise it blocks on each child in turn. ----
+    $exitStatus = []; // pid => wait status
+    if ($progress) {
+        $nextProg = $tStartNs + $intervalNs;
+        while (count($exitStatus) < $threads) {
+            while (($cpid = pcntl_waitpid(-1, $status, WNOHANG)) > 0) {
+                $exitStatus[$cpid] = $status;
+            }
+            $now = hrtime(true);
+            if ($now >= $nextProg) {
+                write_parent_progress($cfg, $W, $threads, $tStartNs, $now);
+                $nextProg += $intervalNs;
+            }
+            if (count($exitStatus) < $threads) {
+                usleep(10000); // 10 ms between polls
+            }
+        }
+    } else {
+        foreach ($pids as $p) {
+            pcntl_waitpid($p, $status);
+            $exitStatus[$p] = $status;
         }
     }
     $tEndNs = hrtime(true);
@@ -314,16 +434,28 @@ try {
     foreach ($parentSocks as $s) {
         @fclose($s);
     }
+
+    // ---- Check for worker failures. ----
+    $failed = false;
+    foreach ($pids as $i => $p) {
+        $st = $exitStatus[$p] ?? -1;
+        if ($st === -1 || !pcntl_wifexited($st) || pcntl_wexitstatus($st) !== 0) {
+            fwrite(STDERR, "php worker $i exited abnormally\n");
+            $failed = true;
+        }
+    }
     if ($failed) {
         foreach ($pids as $p) {
             @unlink(result_file_path($p));
         }
+        // Leave BENCH_PROGRESS_FILE behind (partial result for recovery); drop
+        // only the internal per-child temps.
+        cleanup_progress_temps($cfg, $threads);
         exit(1);
     }
 
-    // ---- Merge per-worker result files. ----
+    // ---- Merge per-worker latency files. ----
     $latencies = [];
-    $retries = 0;
     foreach ($pids as $i => $p) {
         $path = result_file_path($p);
         $data = file_get_contents($path);
@@ -331,42 +463,37 @@ try {
             throw new RuntimeException("missing result file for worker $i: $path");
         }
         unlink($path);
-        $lines = explode("\n", trim($data));
-        $last = array_pop($lines);
-        if (strncmp($last, 'retries=', 8) !== 0) {
-            throw new RuntimeException("malformed result file for worker $i: $path");
-        }
-        $retries += (int) substr($last, 8);
-        if ($cfg['durationS'] > 0) {
-            // Duration mode: per-worker counts vary; require at least one txn.
-            if (count($lines) < 1) {
-                throw new RuntimeException("worker $i reported no latencies: $path");
+        foreach (explode("\n", trim($data)) as $line) {
+            if ($line !== '') {
+                $latencies[] = (int) $line;
             }
-        } elseif (count($lines) !== $cfg['txnsPerThread']) {
-            throw new RuntimeException(
-                "worker $i reported " . count($lines) . ' latencies, expected ' . $cfg['txnsPerThread']
-            );
-        }
-        foreach ($lines as $line) {
-            $latencies[] = (int) $line;
         }
     }
 
-    // ---- Statistics: sort ascending, p(x) = arr[ceil(x/100 * n) - 1] ----
+    // ---- Statistics: sort ascending, p(x) = arr[ceil(x/100 * n) - 1]. ----
     sort($latencies);
     $n = count($latencies);
+    if ($n < 1) {
+        throw new RuntimeException('no latency samples collected');
+    }
     $pct = function (int $x) use ($latencies, $n): int {
         return $latencies[(int) ceil($x / 100 * $n) - 1];
     };
 
-    // Events mode: txns = threads * txns_per_thread (and $n equals that).
-    // Duration mode: txns = total committed timed transactions across workers.
-    $txns = $cfg['durationS'] > 0 ? $n : $threads * $cfg['txnsPerThread'];
+    // ---- Derived counts. Per-worker work scales with the worker count. ----
+    $perWorker = ($W === 1 || $W === 2) ? $cfg['intRows'] : $cfg['blobCount'];
+    $ops = $threads * $perWorker;
     $elapsedS = ($tEndNs - $tStartNs) / 1e9;
-    $tps = $txns / $elapsedS;
+    $throughput = $ops / $elapsedS;
+    $mbPerS = ($W === 3 || $W === 4)
+        ? round($ops * $cfg['blobSize'] / 1e6 / $elapsedS, 1)
+        : 0;
 
     $result = [
         'lang' => 'php',
+        'workload' => $W,
+        'workload_name' => WL_META[$W][0],
+        'unit' => WL_META[$W][1],
         'driver' => 'mysqli',
         'driver_version' => mysqli_get_client_info(), // no connection needed
         'runtime_version' => PHP_VERSION,
@@ -374,19 +501,26 @@ try {
         'client_host' => gethostname(),
         'db_host' => $host,
         'threads' => $threads,
-        'txns' => $txns,
-        'retries' => $retries,
+        'ops' => $ops,
         'errors' => 0,
         'elapsed_s' => round($elapsedS, 3),
-        'tps' => round($tps, 1),
-        'qps' => round($tps * 20, 1), // 18 statements + BEGIN + COMMIT
+        'throughput' => round($throughput, 1),
+        'mb_per_s' => $mbPerS,
         'p50_us' => $pct(50),
         'p95_us' => $pct(95),
         'p99_us' => $pct(99),
         'max_us' => $latencies[$n - 1],
+        'client_cpu_s' => 0, // filled by the harness
+        'server_cpu_s' => 0, // filled by the harness
     ];
 
     echo json_encode($result, JSON_PRESERVE_ZERO_FRACTION), "\n";
+
+    // Success: the progress data is now superseded by stdout.
+    if ($progress) {
+        cleanup_progress_temps($cfg, $threads);
+        @unlink($cfg['progressFile']);
+    }
 } catch (Throwable $e) {
     fwrite(STDERR, 'error: ' . $e->getMessage() . "\n");
     exit(1);

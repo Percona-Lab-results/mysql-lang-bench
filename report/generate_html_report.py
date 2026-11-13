@@ -1,13 +1,11 @@
 #!/usr/bin/env python3
-"""Generate report/report.html plus light-mode PNGs of every chart.
+"""Generate report/report.html plus light-mode PNGs — v3 four-workload report.
 
-Reads mode-tagged results (latest per (mode, lang, threads)) and renders,
-per benchmark mode (work-based "events" and fixed-duration "duration"):
-  - a TPS-by-worker-count chart
-  - a client/server CPU-per-transaction chart
-with legends, hover layer, dark mode, and table views. After writing the
-HTML it screenshots each chart section with headless Chromium into
-report/png/<section>.png (light mode, 2x scale). Set BENCH_NO_PNG=1 to skip.
+One throughput-vs-worker-count line chart per workload (1..4). Go and C# carry
+a stock and a tuned run; the "Show optimized Go/C#" toggle (URL ?optimized=0|1,
+default 0) switches the graphs between all-languages/stock and a Go+C#-only
+stock-vs-optimized focus, reloading on change. Each chart is also exported as a
+light-mode PNG (default and optimized variants) into report/png/.
 """
 import json
 import os
@@ -23,10 +21,19 @@ PNG_DIR = ROOT / "report" / "png"
 DISPLAY = {
     "c": "C", "cpp": "C++", "swift": "Swift", "rust": "Rust", "php": "PHP",
     "java": "Java", "csharp": "C#", "go": "Go", "javascript": "JavaScript",
-    "typescript": "TypeScript", "python": "Python", "ruby": "Ruby",
-    "lua": "Lua",
+    "typescript": "TypeScript", "python": "Python", "ruby": "Ruby", "lua": "Lua",
 }
-MODE_TITLE = {"events": "Work-based mode", "duration": "Fixed-duration mode"}
+# workload id -> (title, subtitle)
+WL = {
+    1: ("Workload 1 — integer insert",
+        "Each worker inserts 1,000,000 single-int rows via 10-row prepared-statement batches. Throughput in rows/second."),
+    2: ("Workload 2 — integer fetch + sum",
+        "Each worker fetches 1,000,000 single-int rows and sums them in application code. Throughput in rows/second."),
+    3: ("Workload 3 — blob insert + MD5",
+        "Each worker generates 100 × 1 MiB random blobs, MD5s each in the app, and inserts them. Throughput in blobs/second."),
+    4: ("Workload 4 — blob read + MD5",
+        "Each worker reads its 100 × 1 MiB blobs and MD5s each in the app. Throughput in blobs/second."),
+}
 
 
 def load_rows():
@@ -36,98 +43,77 @@ def load_rows():
             r = json.loads(f.read_text())
         except (json.JSONDecodeError, OSError):
             continue
-        if "threads" not in r or "client_cpu_s" not in r or "mode" not in r:
+        if "workload" not in r or "threads" not in r or "throughput" not in r:
             continue
-        # variant: True (tuned runtime), False (stock runtime), or None (n/a).
-        # Go and C# carry both a stock and a tuned run; keep them as separate
-        # series so the before/after of the runtime tuning is visible.
-        variant = r.get("tuned")
-        latest[(r["mode"], r["lang"], variant, r["threads"])] = r
+        latest[(r["workload"], r["lang"], r.get("tuned"), r["threads"])] = r
     return latest
 
 
-def build_mode(latest, mode):
-    threads = sorted({t for (m, _, _, t) in latest if m == mode})
-    groups = sorted({(l, v) for (m, l, v, _) in latest if m == mode})
+def build_workload(latest, w):
+    threads = sorted({t for (wl, _, _, t) in latest if wl == w})
+    groups = sorted({(l, v) for (wl, l, v, _) in latest if wl == w})
     if not threads or not groups:
         return None
+    unit = "ops/s"
     series = []
-    dur = 0
     for lang, variant in groups:
-        tps, cli, srv = [], [], []
-        drv = ""
+        thr = []
         for t in threads:
-            r = latest.get((mode, lang, variant, t))
-            if r is None:
-                tps.append(None); cli.append(None); srv.append(None)
-                continue
-            tps.append(round(r["tps"], 1))
-            cli.append(round(r["client_cpu_s"] / r["txns"] * 1e6))
-            srv.append(round(r["server_cpu_s"] / r["txns"] * 1e6))
-            drv = f'{r.get("driver", "")} {r.get("driver_version", "")}'.strip()
-            dur = r.get("duration_s", 0) or dur
-        if any(v is not None for v in tps):
+            r = latest.get((w, lang, variant, t))
+            thr.append(round(r["throughput"], 1) if r else None)
+            if r:
+                unit = r.get("unit", unit)
+        if any(v is not None for v in thr):
             series.append({
                 "lang": lang,
-                "name": DISPLAY.get(lang, lang),  # base name; JS adds a suffix
-                "driver": drv,
-                # variant drives the optimized toggle: "na" and "stock" always
-                # plotted; "tuned" (the optimized Go/C# overlay) only when the
-                # toggle is on. Off by default.
+                "name": DISPLAY.get(lang, lang),
                 "variant": "stock" if variant is False else ("tuned" if variant is True else "na"),
-                "tps": tps, "cli": cli, "srv": srv,
-                "peak": max(v for v in tps if v is not None),
+                "thr": thr,
+                "peak": max(v for v in thr if v is not None),
             })
     if not series:
         return None
     series.sort(key=lambda s: -s["peak"])
-    n = len(threads)
-    srv_lo = [min((s["srv"][i] for s in series if s["srv"][i] is not None), default=0) for i in range(n)]
-    srv_hi = [max((s["srv"][i] for s in series if s["srv"][i] is not None), default=0) for i in range(n)]
-    title = MODE_TITLE.get(mode, mode) + (
-        f" — {dur}s per rung" if mode == "duration" else " — 10,000 txns per worker")
-    return {"threads": threads, "series": series, "srvLo": srv_lo,
-            "srvHi": srv_hi, "title": title}
+    title, sub = WL.get(w, (f"Workload {w}", ""))
+    return {"threads": threads, "series": series, "unit": unit,
+            "title": title, "sub": sub}
 
 
-def table(series, threads, key, fmt):
+def table(series, threads):
     head = "".join(f'<th class="num">{t}</th>' for t in threads)
     body = ""
     for s in series:
+        suf = {"stock": " (stock)", "tuned": " (optimized)"}.get(s["variant"], "")
         cells = "".join(
-            f'<td class="num">{fmt(v) if v is not None else "–"}</td>' for v in s[key])
-        body += f'<tr><th scope="row">{s["name"]}</th>{cells}</tr>\n'
+            f'<td class="num">{v:,.0f}</td>' if v is not None else '<td class="num">–</td>'
+            for v in s["thr"])
+        body += f'<tr><th scope="row">{s["name"]}{suf}</th>{cells}</tr>\n'
     return (f'<table><thead><tr><th>Language</th>{head}</tr></thead>'
             f'<tbody>{body}</tbody></table>')
 
 
 def main():
     latest = load_rows()
-    modes = {}
-    for mode in ("events",):  # work-based only; fixed-duration dropped
-        m = build_mode(latest, mode)
+    workloads = {}
+    for w in (1, 2, 3, 4):
+        m = build_workload(latest, w)
         if m:
-            modes[mode] = m
-    if not modes:
-        print("no mode-tagged CPU-instrumented results found", file=sys.stderr)
+            workloads[w] = m
+    if not workloads:
+        print("no v3 workload results found under results/*/", file=sys.stderr)
         sys.exit(1)
 
-    # KPI row from the primary mode (events if present), optimized view
-    # (tuned Go/C# + the others) — the default the page loads with.
-    pm = modes.get("events") or next(iter(modes.values()))
-    view = [s for s in pm["series"] if s["variant"] in ("na", "stock")]
-    best = view[0]
-    peak_t = pm["threads"][best["tps"].index(best["peak"])]
-    cheapest = min(view, key=lambda s: min(v for v in s["cli"] if v is not None))
-    cheap_v = min(v for v in cheapest["cli"] if v is not None)
-    dearest = max(view, key=lambda s: max(v for v in s["cli"] if v is not None))
-    dear_v = max(v for v in dearest["cli"] if v is not None)
-    kpis = [
-        ("Peak throughput", f"{best['peak']:,.0f} tps", f"{best['name']} at {peak_t} threads"),
-        ("Cheapest client", f"{cheap_v:,} µs/txn", f"{cheapest['name']}, CPU per transaction"),
-        ("Costliest client", f"{dear_v:,} µs/txn", f"{dearest['name']}"),
-        ("Languages", str(len({s["lang"] for s in pm["series"]})), "same workload, same server, per-language data load"),
-    ]
+    langs = sorted({s["lang"] for w in workloads.values() for s in w["series"]})
+    kpis = []
+    for w in (1, 2, 3, 4):
+        if w not in workloads:
+            continue
+        mv = [s for s in workloads[w]["series"] if s["variant"] in ("na", "stock")]
+        best = max(mv, key=lambda s: s["peak"])
+        unit = workloads[w]["unit"]
+        val = f"{best['peak']/1e6:.2f}M" if best["peak"] >= 1e6 else f"{best['peak']:,.0f}"
+        kpis.append((WL[w][0].split("—")[1].strip(), f"{val} {unit}",
+                     f"best: {best['name']}"))
     kpi_html = "\n".join(
         f'<div class="tile"><div class="tile-label">{l}</div>'
         f'<div class="tile-value">{v}</div><div class="tile-sub">{s}</div></div>'
@@ -135,29 +121,19 @@ def main():
 
     sections = ""
     png_ids = []
-    for metric, mtitle, msub in (
-        ("tps", "Throughput by worker count",
-         "Transactions per second. Each language keeps its own color and marker shape; "
-         "lines are named at their right end. Hover for every language&rsquo;s value."),
-        ("cpu", "CPU cost per transaction",
-         "Client CPU microseconds per committed transaction; the gray band is the server "
-         "(mysqld) cost across all languages, min to max, on the same axis."),
-    ):
-        for mode, m in modes.items():
-            sid = f"{metric}-{mode}"
-            png_ids.append(sid)
-            if metric == "tps":
-                tabs = ('<details class="tables"><summary>Table view — transactions per second</summary>'
-                        f'<div class="tablewrap">{table(m["series"], m["threads"], "tps", lambda v: f"{v:,.0f}")}</div></details>')
-            else:
-                tabs = ('<details class="tables"><summary>Table view — client CPU µs per transaction</summary>'
-                        f'<div class="tablewrap">{table(m["series"], m["threads"], "cli", lambda v: f"{v:,}")}</div></details>'
-                        '<details class="tables"><summary>Table view — server CPU µs per transaction</summary>'
-                        f'<div class="tablewrap">{table(m["series"], m["threads"], "srv", lambda v: f"{v:,}")}</div></details>')
-            sections += f"""
+    for w in (1, 2, 3, 4):
+        if w not in workloads:
+            continue
+        m = workloads[w]
+        sid = f"w{w}"
+        png_ids.append(sid)
+        tabs = ('<details class="tables"><summary>Table view — throughput ('
+                + m["unit"] + ')</summary><div class="tablewrap">'
+                + table(m["series"], m["threads"]) + '</div></details>')
+        sections += f"""
   <section id="sec-{sid}">
-    <h2>{mtitle} — {m['title']}</h2>
-    <p class="sub">{msub}</p>
+    <h2>{m['title']}</h2>
+    <p class="sub">{m['sub']}</p>
     <div class="legend" id="legend-{sid}"></div>
     <div class="bigchart" id="chart-{sid}"></div>
     {tabs}
@@ -165,15 +141,15 @@ def main():
 
     html = HTML_TEMPLATE
     for k, v in {
-        "__DATA__": json.dumps({"modes": modes}, separators=(",", ":")),
+        "__DATA__": json.dumps({"workloads": workloads}, separators=(",", ":")),
         "__KPIS__": kpi_html,
         "__SECTIONS__": sections,
+        "__NLANG__": str(len(langs)),
     }.items():
         html = html.replace(k, v)
     OUT.write_text(html)
-    print(f"written: {OUT} (modes: {', '.join(modes)}; {len(pm['series'])} languages)")
+    print(f"written: {OUT} (workloads: {', '.join(map(str, workloads))}; {len(langs)} languages)")
 
-    # ---- PNG export (light mode) ----
     if os.environ.get("BENCH_NO_PNG") == "1":
         return
     chromium = None
@@ -189,21 +165,17 @@ def main():
     def shoot(png, url):
         cmd = [chromium, "--headless", "--disable-gpu", "--no-sandbox",
                "--hide-scrollbars", "--force-device-scale-factor=2",
-               f"--screenshot={png}", "--window-size=1280,780", url]
+               f"--screenshot={png}", "--window-size=1280,760", url]
         try:
             r = subprocess.run(cmd, capture_output=True, text=True, timeout=120)
         except subprocess.TimeoutExpired:
-            print(f"png TIMEOUT for {png.name}", file=sys.stderr)
-            return
-        if png.exists():
-            print(f"png: {png}")
-        else:
-            print(f"png FAILED for {png.name}: {r.stderr.strip()[-200:]}", file=sys.stderr)
+            print(f"png TIMEOUT for {png.name}", file=sys.stderr); return
+        print(f"png: {png}" if png.exists()
+              else f"png FAILED {png.name}: {r.stderr.strip()[-200:]}",
+              file=sys.stderr if not png.exists() else sys.stdout)
 
     for sid in png_ids:
-        # default view: all languages, stock runtime
         shoot(PNG_DIR / f"{sid}.png", f"file://{OUT}#png-{sid}")
-        # optimized view: Go and C# only, stock + optimized curves
         shoot(PNG_DIR / f"{sid}-optimized.png", f"file://{OUT}?optimized=1#png-{sid}")
 
 
@@ -212,7 +184,7 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>MySQL client benchmark — TPS &amp; CPU cost by language</title>
+<title>MySQL client benchmark — four micro-workloads by language</title>
 <style>
   .viz-root {
     color-scheme: light;
@@ -247,31 +219,23 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
     --cat-9: #a3c636; --cat-10: #35b5e0; --cat-11: #b07845; --cat-12: #d6447c; --cat-13: #2aaea5;
   }
   * { box-sizing: border-box; }
-  body.viz-root {
-    margin: 0; background: var(--page); color: var(--text-primary);
-    font-family: system-ui, -apple-system, "Segoe UI", sans-serif;
-    font-size: 14px; line-height: 1.45;
-  }
+  body.viz-root { margin: 0; background: var(--page); color: var(--text-primary);
+    font-family: system-ui, -apple-system, "Segoe UI", sans-serif; font-size: 14px; line-height: 1.45; }
   .wrap { max-width: 1180px; margin: 0 auto; padding: 28px 24px 64px; }
   header.page { display: flex; justify-content: space-between; align-items: baseline; gap: 16px; flex-wrap: wrap; }
   h1 { font-size: 21px; margin: 0; }
   .context { color: var(--text-secondary); margin: 6px 0 0; max-width: 72ch; }
   .controls { display: flex; gap: 12px; align-items: center; flex-wrap: wrap; }
-  #theme-toggle {
-    border: 1px solid var(--border); background: var(--surface-1);
-    color: var(--text-secondary); border-radius: 8px; padding: 6px 12px;
-    cursor: pointer; font: inherit; font-size: 13px;
-  }
-  .toggle {
-    display: inline-flex; align-items: center; gap: 7px; cursor: pointer;
-    border: 1px solid var(--border); background: var(--surface-1);
-    color: var(--text-secondary); border-radius: 8px; padding: 6px 12px; font-size: 13px;
-  }
+  #theme-toggle { border: 1px solid var(--border); background: var(--surface-1);
+    color: var(--text-secondary); border-radius: 8px; padding: 6px 12px; cursor: pointer; font: inherit; font-size: 13px; }
+  .toggle { display: inline-flex; align-items: center; gap: 7px; cursor: pointer;
+    border: 1px solid var(--border); background: var(--surface-1); color: var(--text-secondary);
+    border-radius: 8px; padding: 6px 12px; font-size: 13px; }
   .toggle input { cursor: pointer; margin: 0; }
   .kpis { display: grid; grid-template-columns: repeat(auto-fit, minmax(210px, 1fr)); gap: 12px; margin: 22px 0 8px; }
   .tile { background: var(--surface-1); border: 1px solid var(--border); border-radius: 10px; padding: 14px 16px; }
   .tile-label { color: var(--text-secondary); font-size: 13px; }
-  .tile-value { font-size: 26px; font-weight: 600; margin-top: 2px; }
+  .tile-value { font-size: 23px; font-weight: 600; margin-top: 2px; }
   .tile-sub { color: var(--muted); font-size: 12px; margin-top: 2px; }
   section { margin-top: 34px; }
   h2 { font-size: 16px; margin: 0 0 2px; }
@@ -284,11 +248,9 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
   .bigchart svg:focus { outline: 2px solid var(--cat-1); outline-offset: 2px; border-radius: 4px; }
   svg text { font-family: inherit; font-size: 10.5px; fill: var(--muted); font-variant-numeric: tabular-nums; }
   svg .seriesname { fill: var(--text-secondary); font-weight: 600; font-size: 11.5px; }
-  #tooltip {
-    position: fixed; pointer-events: none; z-index: 10; display: none;
+  #tooltip { position: fixed; pointer-events: none; z-index: 10; display: none;
     background: var(--surface-1); border: 1px solid var(--border); border-radius: 8px;
-    box-shadow: 0 4px 14px rgba(0,0,0,0.18); padding: 8px 11px; font-size: 12.5px; min-width: 150px;
-  }
+    box-shadow: 0 4px 14px rgba(0,0,0,0.18); padding: 8px 11px; font-size: 12.5px; min-width: 150px; }
   #tooltip .tt-title { color: var(--muted); margin-bottom: 4px; }
   #tooltip .tt-row { display: flex; align-items: center; gap: 7px; margin-top: 2px; }
   #tooltip .tt-val { font-weight: 600; color: var(--text-primary); font-variant-numeric: tabular-nums; }
@@ -302,9 +264,7 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
   tbody tr:last-child th, tbody tr:last-child td { border-bottom: none; }
   td.num, th.num { text-align: right; font-variant-numeric: tabular-nums; }
   footer { color: var(--muted); font-size: 12px; margin-top: 30px; max-width: 86ch; }
-  /* PNG-export mode: show exactly one section, light theme, no chrome */
-  body.pngmode header.page, body.pngmode .kpis, body.pngmode footer,
-  body.pngmode section { display: none; }
+  body.pngmode header.page, body.pngmode .kpis, body.pngmode footer, body.pngmode section { display: none; }
   body.pngmode section.png-show { display: block; margin-top: 0; }
   body.pngmode section.png-show details.tables { display: none; }
   body.pngmode .wrap { padding: 16px 20px; }
@@ -314,16 +274,14 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
 <div class="wrap">
   <header class="page">
     <div>
-      <h1>MySQL client benchmark — throughput &amp; CPU cost by language</h1>
-      <p class="context">sysbench <code>oltp_read_write</code>-style transactions (10 point selects,
-      4 range selects, 2 updates, delete+insert per txn), 10&nbsp;M-row table, Percona Server 8.4.11,
-      one language per pristine data load, 15-minute read-only sysbench warm-up before each sweep,
-      client and server on the same 80-core host. Workers: 4&nbsp;&rarr;&nbsp;512.
-      Work-based workload: every worker runs a fixed 10,000 transactions per rung.
-      All languages run on stock runtime defaults. Enable <em>Show optimized
-      Go/C#</em> to focus on Go and C# alone — each shown with its stock
-      (default) curve and its tuned-runtime curve (Go <code>GOMAXPROCS=16
-      GOGC=800</code>; C# server GC) — with the other languages removed.</p>
+      <h1>MySQL client benchmark — four micro-workloads by language</h1>
+      <p class="context">Per worker: insert 1M single-int rows (10-row prepared batches),
+      fetch 1M ints and sum in-app, insert 100 × 1 MiB blobs with in-app MD5, read 100
+      blobs with in-app MD5. __NLANG__ languages, Percona Server 8.4.11 tuned for maximum
+      write throughput (no per-commit disk sync), client and server on one 80-core host,
+      workers 4&nbsp;&rarr;&nbsp;512, no pre-warming. All languages run on stock runtime
+      defaults; enable <em>Show optimized Go/C#</em> to focus on Go and C# with their
+      stock and tuned-runtime curves.</p>
     </div>
     <div class="controls">
       <label class="toggle"><input type="checkbox" id="opt-toggle"> Show optimized Go/C#</label>
@@ -334,12 +292,13 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
   <div class="kpis">__KPIS__</div>
 __SECTIONS__
   <footer>
-    Methodology: per-worker PRNG with identical streams across languages; warmup excluded from the
-    timed window via a start barrier; retries on deadlock/lock-wait/duplicate-key with full redraw.
-    Client CPU = user+sys of the whole benchmark process tree; server CPU = mysqld utime+stime delta
-    over the same window. Sources: <code>results/&lt;host&gt;/*.json</code>,
-    <code>results/summary.csv</code>. Regenerate (HTML + light-mode PNGs in
-    <code>report/png/</code>) with <code>python3 report/generate_html_report.py</code>.
+    Per-worker counts (work scales with worker count); barrier-synchronized timing;
+    inserts run before the matching reads at each worker count; reads hit server-cached
+    data (no warm-up). Client CPU = user+sys of the benchmark process tree; server CPU =
+    mysqld utime+stime delta. Go and C# are run twice (stock and tuned runtime) and kept
+    as separate benchmarks. Sources: <code>results/&lt;host&gt;/*.json</code>,
+    <code>results/summary.csv</code>. Regenerate with
+    <code>python3 report/generate_html_report.py</code>.
   </footer>
 </div>
 
@@ -349,7 +308,6 @@ __SECTIONS__
 const DATA = __DATA__;
 (function () {
   "use strict";
-  // PNG-export mode: #png-<section id> renders one section, light theme.
   const pngMatch = location.hash.match(/^#png-(.+)$/);
   if (pngMatch) {
     document.documentElement.setAttribute("data-theme", "light");
@@ -358,261 +316,159 @@ const DATA = __DATA__;
     if (sec) sec.classList.add("png-show");
   }
 
-  // "Show optimized Go/C#" toggle, driven by ?optimized=0|1 (default 0 = off).
-  // Off: every language shows its stock curve. On: the tuned Go/C# curves are
-  // overlaid alongside their stock curves (both kept, not swapped).
   const params = new URLSearchParams(location.search);
   const showOptimized = params.get("optimized") === "1";
   const optToggle = document.getElementById("opt-toggle");
   if (optToggle) {
     optToggle.checked = showOptimized;
-    // Flipping the toggle updates the URL and reloads the page.
     optToggle.addEventListener("change", () => {
       params.set("optimized", optToggle.checked ? "1" : "0");
       location.search = params.toString();
     });
   }
-  // Off: every language, stock curves only. On: focus on Go and C# alone,
-  // showing each one's stock (default) and optimized curves — all other
-  // languages are removed.
+  // Off: all languages, stock curves. On: only Go and C#, stock + optimized.
   const showSeries = s => showOptimized
     ? (s.lang === "go" || s.lang === "csharp")
     : s.variant !== "tuned";
-  // Label: plain by default; when the overlay is on, disambiguate the Go/C#
-  // pair as "(stock)" vs "(optimized)".
   const labelOf = s => s.variant === "tuned" ? s.name + " (optimized)"
     : (s.variant === "stock" && showOptimized) ? s.name + " (stock)" : s.name;
-  const dashOf = s => s.variant === "tuned";  // optimized overlay = dashed
+  const dashOf = s => s.variant === "tuned";
 
   const tooltip = document.getElementById("tooltip");
-  const fmt = v => v >= 10000 ? Math.round(v / 1000) + "K" : Math.round(v).toLocaleString("en-US");
+  const fmt = v => v >= 1e6 ? (v / 1e6).toFixed(1) + "M"
+    : v >= 10000 ? Math.round(v / 1000) + "K" : Math.round(v).toLocaleString("en-US");
   const fmtFull = v => Math.round(v).toLocaleString("en-US");
   const ns = "http://www.w3.org/2000/svg";
-  const el = (name, attrs) => {
-    const e = document.createElementNS(ns, name);
-    for (const k in attrs) e.setAttribute(k, attrs[k]);
-    return e;
-  };
+  const el = (name, attrs) => { const e = document.createElementNS(ns, name);
+    for (const k in attrs) e.setAttribute(k, attrs[k]); return e; };
 
-  // Fixed per-language identity: unique hue + marker shape (circle/square used once).
   const STYLE = {
-    c:          { slot: 1,  shape: "circle"   },
-    cpp:        { slot: 2,  shape: "square"   },
-    swift:      { slot: 3,  shape: "triangle" },
-    rust:       { slot: 8,  shape: "diamond"  },
-    php:        { slot: 5,  shape: "tridown"  },
-    java:       { slot: 6,  shape: "plus"     },
-    csharp:     { slot: 11, shape: "star"     },
-    go:         { slot: 10, shape: "diamond"  },
-    javascript: { slot: 4,  shape: "tridown"  },
-    typescript: { slot: 9,  shape: "star"     },
-    python:     { slot: 7,  shape: "plus"     },
-    ruby:       { slot: 12, shape: "triangle" },
-    lua:        { slot: 13, shape: "x"        },
+    c:{slot:1,shape:"circle"}, cpp:{slot:2,shape:"square"}, swift:{slot:3,shape:"triangle"},
+    rust:{slot:8,shape:"diamond"}, php:{slot:5,shape:"tridown"}, java:{slot:6,shape:"plus"},
+    csharp:{slot:11,shape:"star"}, go:{slot:10,shape:"diamond"}, javascript:{slot:4,shape:"tridown"},
+    typescript:{slot:9,shape:"star"}, python:{slot:7,shape:"plus"}, ruby:{slot:12,shape:"triangle"},
+    lua:{slot:13,shape:"x"},
   };
-  const styleFor = lang => {
-    const s = STYLE[lang] || { slot: 1, shape: "circle" };
-    return { color: `var(--cat-${s.slot})`, shape: s.shape };
-  };
+  const styleFor = lang => { const s = STYLE[lang] || {slot:1,shape:"circle"};
+    return { color:`var(--cat-${s.slot})`, shape:s.shape }; };
 
   function shapeNode(shape, x, y, color, surface) {
     const common = { fill: color, stroke: surface, "stroke-width": 2, "stroke-linejoin": "round" };
     const s = 4.6;
     if (shape === "circle") return el("circle", { cx: x, cy: y, r: s, ...common });
-    if (shape === "square") return el("rect", { x: x - s + 0.4, y: y - s + 0.4, width: 2 * s - 0.8, height: 2 * s - 0.8, rx: 1, ...common });
-    if (shape === "triangle") return el("path", { d: `M ${x} ${y - s - 0.6} L ${x + s + 0.4} ${y + s - 0.4} L ${x - s - 0.4} ${y + s - 0.4} Z`, ...common });
-    if (shape === "tridown") return el("path", { d: `M ${x} ${y + s + 0.6} L ${x + s + 0.4} ${y - s + 0.4} L ${x - s - 0.4} ${y - s + 0.4} Z`, ...common });
-    if (shape === "plus") {
-      const a = 1.9, p = s + 1;
-      return el("path", { d: `M ${x - a} ${y - p} H ${x + a} V ${y - a} H ${x + p} V ${y + a} H ${x + a} V ${y + p} H ${x - a} V ${y + a} H ${x - p} V ${y - a} H ${x - a} Z`, ...common });
-    }
-    if (shape === "star") {
-      const ro = s + 1.6, ri = 2.4, pts = [];
-      for (let k = 0; k < 10; k++) {
-        const r = k % 2 === 0 ? ro : ri;
-        const ang = -Math.PI / 2 + k * Math.PI / 5;
-        pts.push((x + r * Math.cos(ang)).toFixed(2) + " " + (y + r * Math.sin(ang)).toFixed(2));
-      }
-      return el("path", { d: "M " + pts.join(" L ") + " Z", ...common });
-    }
-    if (shape === "x") {
-      const a = 1.5, p = s + 0.8, m = a * 1.42;
-      return el("path", { d: `M ${x - p} ${y - p + m} L ${x - m} ${y - p} L ${x} ${y - m} L ${x + m} ${y - p} L ${x + p} ${y - p + m} L ${x + m} ${y} L ${x + p} ${y + p - m} L ${x + m} ${y + p} L ${x} ${y + m} L ${x - m} ${y + p} L ${x - p} ${y + p - m} L ${x - m} ${y} Z`, ...common });
-    }
-    return el("path", { d: `M ${x} ${y - s - 1} L ${x + s + 1} ${y} L ${x} ${y + s + 1} L ${x - s - 1} ${y} Z`, ...common }); // diamond
+    if (shape === "square") return el("rect", { x: x-s+0.4, y: y-s+0.4, width: 2*s-0.8, height: 2*s-0.8, rx: 1, ...common });
+    if (shape === "triangle") return el("path", { d: `M ${x} ${y-s-0.6} L ${x+s+0.4} ${y+s-0.4} L ${x-s-0.4} ${y+s-0.4} Z`, ...common });
+    if (shape === "tridown") return el("path", { d: `M ${x} ${y+s+0.6} L ${x+s+0.4} ${y-s+0.4} L ${x-s-0.4} ${y-s+0.4} Z`, ...common });
+    if (shape === "plus") { const a=1.9,p=s+1;
+      return el("path", { d: `M ${x-a} ${y-p} H ${x+a} V ${y-a} H ${x+p} V ${y+a} H ${x+a} V ${y+p} H ${x-a} V ${y+a} H ${x-p} V ${y-a} H ${x-a} Z`, ...common }); }
+    if (shape === "star") { const ro=s+1.6,ri=2.4,pts=[];
+      for (let k=0;k<10;k++){ const r=k%2===0?ro:ri, ang=-Math.PI/2+k*Math.PI/5;
+        pts.push((x+r*Math.cos(ang)).toFixed(2)+" "+(y+r*Math.sin(ang)).toFixed(2)); }
+      return el("path", { d: "M "+pts.join(" L ")+" Z", ...common }); }
+    if (shape === "x") { const a=1.5,p=s+0.8,m=a*1.42;
+      return el("path", { d: `M ${x-p} ${y-p+m} L ${x-m} ${y-p} L ${x} ${y-m} L ${x+m} ${y-p} L ${x+p} ${y-p+m} L ${x+m} ${y} L ${x+p} ${y+p-m} L ${x+m} ${y+p} L ${x} ${y+m} L ${x-m} ${y+p} L ${x-p} ${y+p-m} L ${x-m} ${y} Z`, ...common }); }
+    return el("path", { d: `M ${x} ${y-s-1} L ${x+s+1} ${y} L ${x} ${y+s+1} L ${x-s-1} ${y} Z`, ...common });
   }
-
   function keySVG(st, w, h) {
     const svg = el("svg", { width: w, height: h, viewBox: `0 0 ${w} ${h}`, "aria-hidden": "true" });
-    const ln = el("line", { x1: 1, x2: w - 1, y1: h / 2, y2: h / 2, stroke: st.color, "stroke-width": 2, "stroke-linecap": "round" });
+    const ln = el("line", { x1: 1, x2: w-1, y1: h/2, y2: h/2, stroke: st.color, "stroke-width": 2, "stroke-linecap": "round" });
     if (st.dash) ln.setAttribute("stroke-dasharray", "5 4");
-    svg.appendChild(ln);
-    svg.appendChild(shapeNode(st.shape, w / 2, h / 2, st.color, "var(--surface-1)"));
+    svg.appendChild(ln); svg.appendChild(shapeNode(st.shape, w/2, h/2, st.color, "var(--surface-1)"));
     return svg;
   }
-
   function legendInto(hostId, entries) {
-    const leg = document.getElementById(hostId);
-    if (!leg) return;
-    for (const e of entries) {
-      const item = document.createElement("span");
-      item.className = "item";
-      item.appendChild(e.key);
-      item.appendChild(document.createTextNode(e.name));
-      leg.appendChild(item);
-    }
+    const leg = document.getElementById(hostId); if (!leg) return;
+    for (const e of entries) { const item = document.createElement("span"); item.className = "item";
+      item.appendChild(e.key); item.appendChild(document.createTextNode(e.name)); leg.appendChild(item); }
+  }
+
+  function niceMax(v) {
+    if (v <= 0) return 1;
+    const p = Math.pow(10, Math.floor(Math.log10(v)));
+    for (const m of [1,1.5,2,2.5,3,4,5,6,8,10]) if (p*m >= v) return p*m;
+    return p*10;
   }
 
   function bigChart(cfg) {
     const T = cfg.T, N = T.length;
-    const BW = 1120, BH = 540, BM = { l: 56, r: 170, t: 14, b: 32 };
-    const BIW = BW - BM.l - BM.r, BIH = BH - BM.t - BM.b;
-    const X = i => BM.l + i * BIW / (N - 1);
-    const Y = v => BM.t + BIH - (v / cfg.yMax) * BIH;
+    const BW = 1120, BH = 540, BM = { l: 64, r: 184, t: 14, b: 32 };
+    const BIW = BW-BM.l-BM.r, BIH = BH-BM.t-BM.b;
+    const X = i => BM.l + i*BIW/(N-1);
+    const Y = v => BM.t + BIH - (v/cfg.yMax)*BIH;
     const svg = el("svg", { viewBox: `0 0 ${BW} ${BH}`, tabindex: "0", role: "img", "aria-label": cfg.ariaLabel });
-    for (let tv = 0; tv <= cfg.yMax; tv += cfg.yStep) {
-      svg.appendChild(el("line", { x1: BM.l, x2: BW - BM.r, y1: Y(tv), y2: Y(tv), stroke: "var(--grid)", "stroke-width": 1 }));
-      const t = el("text", { x: BM.l - 6, y: Y(tv) + 3.5, "text-anchor": "end" });
-      t.textContent = tv === 0 ? "0" : (cfg.yMax >= 10000 ? (tv / 1000) + "K" : tv.toLocaleString("en-US"));
-      svg.appendChild(t);
-    }
-    svg.appendChild(el("line", { x1: BM.l, x2: BW - BM.r, y1: BM.t + BIH, y2: BM.t + BIH, stroke: "var(--baseline)", "stroke-width": 1 }));
-    for (let i = 0; i < N; i++) {
-      const t = el("text", { x: X(i), y: BH - 12, "text-anchor": "middle" });
-      t.textContent = T[i];
-      svg.appendChild(t);
-    }
-    if (cfg.band) {
-      const up = cfg.band.hi.map((v, i) => (i ? "L" : "M") + X(i).toFixed(1) + " " + Y(v).toFixed(1)).join(" ");
-      const down = cfg.band.lo.map((_, i) => "L" + X(N - 1 - i).toFixed(1) + " " + Y(cfg.band.lo[N - 1 - i]).toFixed(1)).join(" ");
-      svg.appendChild(el("path", { d: up + " " + down + " Z", fill: "var(--band)", opacity: 0.16, stroke: "none" }));
-    }
-    // null-aware: a missing rung breaks the line rather than dropping to 0.
-    const path = vals => {
-      let d = "", pen = false;
-      for (let i = 0; i < N; i++) {
-        if (vals[i] == null) { pen = false; continue; }
-        d += (pen ? "L" : "M") + X(i).toFixed(1) + " " + Y(vals[i]).toFixed(1) + " ";
-        pen = true;
-      }
-      return d.trim();
-    };
-    const lastIdxOf = vals => { for (let i = N - 1; i >= 0; i--) if (vals[i] != null) return i; return N - 1; };
-    for (let si = cfg.seriesDefs.length - 1; si >= 0; si--) {
+    const step = cfg.yMax/5;
+    for (let k=0;k<=5;k++){ const tv=step*k;
+      svg.appendChild(el("line", { x1: BM.l, x2: BW-BM.r, y1: Y(tv), y2: Y(tv), stroke: "var(--grid)", "stroke-width": 1 }));
+      const t = el("text", { x: BM.l-6, y: Y(tv)+3.5, "text-anchor": "end" }); t.textContent = tv===0?"0":fmt(tv); svg.appendChild(t); }
+    svg.appendChild(el("line", { x1: BM.l, x2: BW-BM.r, y1: BM.t+BIH, y2: BM.t+BIH, stroke: "var(--baseline)", "stroke-width": 1 }));
+    for (let i=0;i<N;i++){ const t = el("text", { x: X(i), y: BH-12, "text-anchor": "middle" }); t.textContent = T[i]; svg.appendChild(t); }
+    const path = vals => { let d="",pen=false;
+      for (let i=0;i<N;i++){ if (vals[i]==null){pen=false;continue;}
+        d += (pen?"L":"M")+X(i).toFixed(1)+" "+Y(vals[i]).toFixed(1)+" "; pen=true; } return d.trim(); };
+    const lastIdxOf = vals => { for (let i=N-1;i>=0;i--) if (vals[i]!=null) return i; return N-1; };
+    for (let si=cfg.seriesDefs.length-1; si>=0; si--) {
       const d = cfg.seriesDefs[si];
       const lp = el("path", { d: path(d.vals), fill: "none", stroke: d.st.color, "stroke-width": 2, "stroke-linejoin": "round", "stroke-linecap": "round" });
       if (d.st.dash) lp.setAttribute("stroke-dasharray", "7 5");
       svg.appendChild(lp);
-      for (let i = 0; i < N; i++) {
-        if (d.vals[i] == null) continue;
-        svg.appendChild(shapeNode(d.st.shape, X(i), Y(d.vals[i]), d.st.color, "var(--surface-1)"));
-      }
+      for (let i=0;i<N;i++){ if (d.vals[i]==null) continue; svg.appendChild(shapeNode(d.st.shape, X(i), Y(d.vals[i]), d.st.color, "var(--surface-1)")); }
     }
     const labels = cfg.seriesDefs.map(d => { const li = lastIdxOf(d.vals); const yy = Y(d.vals[li]); return { d, li, endY: yy, y: yy }; });
-    if (cfg.band) labels.push({ band: true, li: N - 1, endY: Y((cfg.band.lo[N - 1] + cfg.band.hi[N - 1]) / 2), y: Y((cfg.band.lo[N - 1] + cfg.band.hi[N - 1]) / 2) });
-    labels.sort((a, b) => a.y - b.y);
+    labels.sort((a,b)=>a.y-b.y);
     const GAPL = 16;
-    for (let k = 1; k < labels.length; k++) {
-      if (labels[k].y - labels[k - 1].y < GAPL) labels[k].y = labels[k - 1].y + GAPL;
-    }
-    const over = labels[labels.length - 1].y - (BM.t + BIH + 6);
-    if (over > 0) for (const L of labels) L.y -= over * (L.y - BM.t) / BIH;
+    for (let k=1;k<labels.length;k++) if (labels[k].y-labels[k-1].y < GAPL) labels[k].y = labels[k-1].y + GAPL;
+    const over = labels.length ? labels[labels.length-1].y - (BM.t+BIH+6) : 0;
+    if (over > 0) for (const L of labels) L.y -= over*(L.y-BM.t)/BIH;
     for (const L of labels) {
-      const anchorX = L.band ? X(N - 1) : X(L.li);
-      if (Math.abs(L.y - L.endY) > 3 || anchorX < X(N - 1) - 1) {
-        svg.appendChild(el("line", { x1: anchorX + 7, y1: L.endY, x2: X(N - 1) + 22, y2: L.y, stroke: "var(--baseline)", "stroke-width": 1 }));
-      }
-      const t = el("text", { x: X(N - 1) + 26, y: L.y + 3.5, class: "seriesname" });
-      t.textContent = L.band ? cfg.band.name : L.d.name + "  " + fmt(L.d.vals[L.li]);
-      if (L.band) t.setAttribute("fill", "var(--muted)");
-      svg.appendChild(t);
+      const ax = X(L.li);
+      if (Math.abs(L.y-L.endY) > 3 || ax < X(N-1)-1)
+        svg.appendChild(el("line", { x1: ax+7, y1: L.endY, x2: X(N-1)+22, y2: L.y, stroke: "var(--baseline)", "stroke-width": 1 }));
+      const t = el("text", { x: X(N-1)+26, y: L.y+3.5, class: "seriesname" });
+      t.textContent = L.d.name + "  " + fmt(L.d.vals[L.li]); svg.appendChild(t);
     }
-    const cross = el("line", { y1: BM.t, y2: BM.t + BIH, stroke: "var(--baseline)", "stroke-width": 1, visibility: "hidden" });
+    const cross = el("line", { y1: BM.t, y2: BM.t+BIH, stroke: "var(--baseline)", "stroke-width": 1, visibility: "hidden" });
     svg.appendChild(cross);
-    let idx = N - 1;
+    let idx = N-1;
     function show(i, cx, cy) {
-      idx = i;
-      cross.setAttribute("x1", X(i)); cross.setAttribute("x2", X(i));
-      cross.setAttribute("visibility", "visible");
+      idx = i; cross.setAttribute("x1", X(i)); cross.setAttribute("x2", X(i)); cross.setAttribute("visibility", "visible");
       tooltip.replaceChildren();
-      const title = document.createElement("div");
-      title.className = "tt-title"; title.textContent = T[i] + " threads";
-      tooltip.appendChild(title);
-      const ranked = cfg.seriesDefs.slice().sort((a, b) => b.vals[i] - a.vals[i]);
-      for (const d of ranked) {
-        const row = document.createElement("div"); row.className = "tt-row";
+      const title = document.createElement("div"); title.className = "tt-title"; title.textContent = T[i] + " workers"; tooltip.appendChild(title);
+      const ranked = cfg.seriesDefs.slice().sort((a,b)=> (b.vals[i]||0)-(a.vals[i]||0));
+      for (const d of ranked) { const row = document.createElement("div"); row.className = "tt-row";
         row.appendChild(keySVG(d.st, 20, 11));
         const val = document.createElement("span"); val.className = "tt-val";
-        val.textContent = (d.vals[i] == null) ? "n/a" : fmtFull(d.vals[i]) + (cfg.unit ? " " + cfg.unit : "");
+        val.textContent = d.vals[i]==null ? "n/a" : fmtFull(d.vals[i]) + " " + cfg.unit;
         const name = document.createElement("span"); name.className = "tt-name"; name.textContent = d.name;
-        row.append(val, name); tooltip.appendChild(row);
-      }
-      if (cfg.band) {
-        const row = document.createElement("div"); row.className = "tt-row";
-        const sw = document.createElement("span");
-        sw.style.cssText = "width:20px;height:9px;background:var(--band);opacity:.25;border-radius:2px;flex:none;";
-        const val = document.createElement("span"); val.className = "tt-val";
-        val.textContent = fmtFull(cfg.band.lo[i]) + "–" + fmtFull(cfg.band.hi[i]) + (cfg.unit ? " " + cfg.unit : "");
-        const name = document.createElement("span"); name.className = "tt-name"; name.textContent = cfg.band.name;
-        row.append(sw, val, name); tooltip.appendChild(row);
-      }
+        row.append(val, name); tooltip.appendChild(row); }
       tooltip.style.display = "block";
       const tw = tooltip.offsetWidth, th = tooltip.offsetHeight, pad = 14;
-      let left = cx + pad;
-      if (left + tw > window.innerWidth - 8) left = cx - tw - pad;
-      tooltip.style.left = left + "px";
-      tooltip.style.top = Math.max(8, Math.min(cy - 10, window.innerHeight - th - 8)) + "px";
+      let left = cx + pad; if (left+tw > window.innerWidth-8) left = cx-tw-pad;
+      tooltip.style.left = left + "px"; tooltip.style.top = Math.max(8, Math.min(cy-10, window.innerHeight-th-8)) + "px";
     }
-    function hide() { cross.setAttribute("visibility", "hidden"); tooltip.style.display = "none"; }
-    svg.addEventListener("pointermove", ev => {
-      const rect = svg.getBoundingClientRect();
-      const px = (ev.clientX - rect.left) * (BW / rect.width);
-      let best = 0, bd = Infinity;
-      for (let i = 0; i < N; i++) { const d = Math.abs(px - X(i)); if (d < bd) { bd = d; best = i; } }
-      show(best, ev.clientX, ev.clientY);
-    });
+    function hide(){ cross.setAttribute("visibility","hidden"); tooltip.style.display="none"; }
+    svg.addEventListener("pointermove", ev => { const rect = svg.getBoundingClientRect();
+      const px = (ev.clientX-rect.left)*(BW/rect.width); let best=0,bd=Infinity;
+      for (let i=0;i<N;i++){ const d=Math.abs(px-X(i)); if (d<bd){bd=d;best=i;} } show(best, ev.clientX, ev.clientY); });
     svg.addEventListener("pointerleave", hide);
-    svg.addEventListener("focus", () => {
-      const r = svg.getBoundingClientRect();
-      show(idx, r.left + (X(idx) * r.width / BW), r.top + r.height / 3);
-    });
+    svg.addEventListener("focus", () => { const r = svg.getBoundingClientRect(); show(idx, r.left+(X(idx)*r.width/BW), r.top+r.height/3); });
     svg.addEventListener("blur", hide);
-    svg.addEventListener("keydown", ev => {
-      if (ev.key === "ArrowRight" || ev.key === "ArrowLeft") {
-        ev.preventDefault();
-        const i = Math.min(N - 1, Math.max(0, idx + (ev.key === "ArrowRight" ? 1 : -1)));
-        const r = svg.getBoundingClientRect();
-        show(i, r.left + (X(i) * r.width / BW), r.top + r.height / 3);
-      } else if (ev.key === "Escape") hide();
-    });
-    const host = document.getElementById(cfg.hostId);
-    if (host) host.appendChild(svg);
+    svg.addEventListener("keydown", ev => { if (ev.key==="ArrowRight"||ev.key==="ArrowLeft"){ ev.preventDefault();
+        const i = Math.min(N-1, Math.max(0, idx + (ev.key==="ArrowRight"?1:-1))); const r = svg.getBoundingClientRect();
+        show(i, r.left+(X(i)*r.width/BW), r.top+r.height/3); } else if (ev.key==="Escape") hide(); });
+    const host = document.getElementById(cfg.hostId); if (host) host.appendChild(svg);
   }
 
-  for (const mode of Object.keys(DATA.modes)) {
-    const M = DATA.modes[mode];
-    // Stock curves (solid) always; the optimized Go/C# overlay (dashed) when on.
+  for (const w of Object.keys(DATA.workloads)) {
+    const M = DATA.workloads[w];
     const shown = M.series.filter(showSeries);
     const stOf = s => ({ ...styleFor(s.lang), dash: dashOf(s) });
-    const defsFor = key => shown.map(s => ({ name: labelOf(s), vals: s[key], st: stOf(s) }));
-    const langLegend = () => shown.map(s => ({ name: labelOf(s), key: keySVG(stOf(s), 26, 12) }));
-
-    legendInto(`legend-tps-${mode}`, langLegend());
+    const defs = shown.map(s => ({ name: labelOf(s), vals: s.thr, st: stOf(s) }));
+    legendInto(`legend-w${w}`, shown.map(s => ({ name: labelOf(s), key: keySVG(stOf(s), 26, 12) })));
+    const peak = Math.max(1, ...shown.map(s => Math.max(...s.thr.filter(v => v != null))));
     bigChart({
-      hostId: `chart-tps-${mode}`, T: M.threads, seriesDefs: defsFor("tps"),
-      yMax: 30000, yStep: 5000, unit: "tps", band: null,
-      ariaLabel: `Transactions per second by worker count, ${mode} mode`,
-    });
-
-    const cpuMax = Math.ceil(Math.max(...shown.map(s => Math.max(...s.cli)), ...M.srvHi) / 2000) * 2000 || 2000;
-    const bandKey = document.createElement("span");
-    bandKey.style.cssText = "width:26px;height:10px;background:var(--band);opacity:.25;border-radius:2px;display:inline-block;";
-    legendInto(`legend-cpu-${mode}`, langLegend().concat([{ name: "Server (mysqld), min–max", key: bandKey }]));
-    bigChart({
-      hostId: `chart-cpu-${mode}`, T: M.threads, seriesDefs: defsFor("cli"),
-      yMax: cpuMax, yStep: cpuMax > 16000 ? 4000 : 2000, unit: "µs",
-      band: { lo: M.srvLo, hi: M.srvHi, name: "Server (mysqld)" },
-      ariaLabel: `Client CPU microseconds per transaction, ${mode} mode`,
+      hostId: `chart-w${w}`, T: M.threads, seriesDefs: defs,
+      yMax: niceMax(peak), unit: M.unit,
+      ariaLabel: `${M.title}: throughput by worker count`,
     });
   }
 

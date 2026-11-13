@@ -1,14 +1,21 @@
 // MySQL language benchmark - TypeScript implementation (Node.js + mysql2).
 //
-// A faithful typed port of impl/javascript/bench.mjs, following SPEC.md v2
-// exactly: multithreaded sysbench-oltp_read_write-style transactional
-// workload. One worker_threads Worker per benchmark worker (real OS thread,
-// own V8 isolate), each with its own mysql2 connection (no pools; autocommit
-// ON, explicit BEGIN/COMMIT as plain .query() calls), its own 31-bit LCG PRNG
-// seeded BENCH_SEED + worker_index, barrier-based timing coordinated over
-// postMessage, retry on MySQL errors 1213/1205/1062 with full value redraw,
-// per-transaction latency in integer microseconds, one JSON result line on
-// stdout.
+// A strictly-typed port of the v3 JavaScript implementation, following SPEC.md
+// v3 exactly: one of four micro-workloads selected by BENCH_WORKLOAD (1..4),
+// run with BENCH_THREADS concurrent workers, one JSON result line on stdout.
+//
+//   WL1 int-insert   prepared multi-row INSERT (BENCH_INT_BATCH placeholders)
+//   WL2 int-read     SELECT val ... LIMIT, sum in app (64-bit accumulator)
+//   WL3 blob-insert  random blob + app-side MD5, prepared INSERT(id, data)
+//   WL4 blob-read    SELECT data WHERE id = ?, app-side MD5
+//
+// Each benchmark worker is a worker_threads Worker (real OS thread, own V8
+// isolate) with its own mysql2 connection (no pools; maxAllowedPacket set to
+// 256 MiB for 1 MiB blobs), its own 31-bit LCG PRNG seeded BENCH_SEED +
+// worker_index, barrier-based timing coordinated over postMessage, and
+// per-operation latency in integer microseconds. Workers publish their
+// completed-op counts into a shared Int32Array slot so main can checkpoint
+// progress to BENCH_PROGRESS_FILE while the timed phase runs.
 //
 // mysql2's .execute() is a server-side prepared statement, prepared once per
 // distinct SQL per connection via the driver's statement cache (prepared:true).
@@ -16,6 +23,7 @@
 // Compiled by tsc into dist/bench.js; new Worker(fileURLToPath(import.meta.url))
 // therefore resolves to the running compiled file, as in the JS version.
 
+import { createHash, randomFillSync } from "node:crypto";
 import fs from "node:fs";
 import os from "node:os";
 import process from "node:process";
@@ -28,24 +36,10 @@ import {
 } from "node:worker_threads";
 
 import { createConnection } from "mysql2/promise";
-import type { RowDataPacket } from "mysql2/promise";
+import type { ConnectionOptions, RowDataPacket } from "mysql2/promise";
 
-const C_VAL = "abcdefghij".repeat(12); // 120 chars
-const PAD_VAL = "0123456789".repeat(6); // 60 chars
-
-// deadlock, lock wait timeout, duplicate key
-const RETRYABLE: ReadonlySet<number> = new Set([1213, 1205, 1062]);
-
-const SQL_POINT = "SELECT c FROM sbtest WHERE id = ?";
-const SQL_RANGE = "SELECT c FROM sbtest WHERE id BETWEEN ? AND ?";
-const SQL_SUM = "SELECT SUM(k) FROM sbtest WHERE id BETWEEN ? AND ?";
-const SQL_ORDER = "SELECT c FROM sbtest WHERE id BETWEEN ? AND ? ORDER BY c";
-const SQL_DISTINCT =
-  "SELECT DISTINCT c FROM sbtest WHERE id BETWEEN ? AND ? ORDER BY c";
-const SQL_IDX_UPDATE = "UPDATE sbtest SET k = k + 1 WHERE id = ?";
-const SQL_NONIDX_UPDATE = "UPDATE sbtest SET c = ? WHERE id = ?";
-const SQL_DELETE = "DELETE FROM sbtest WHERE id = ?";
-const SQL_INSERT = "INSERT INTO sbtest (id, k, c, pad) VALUES (?, ?, ?, ?)";
+// 256 MiB — big enough to send 1 MiB (and larger) blobs as a single packet.
+const MAX_ALLOWED_PACKET = 268435456;
 
 // ----------------------------------------------------------------- types ---
 
@@ -55,34 +49,53 @@ interface BenchConfig {
   user: string;
   password: string;
   database: string;
-  tableRows: number;
-  rangeSize: number;
-  warmupTxns: number;
-  txnsPerThread: number;
-  durationS: number;
+  workload: number;
   seed: number;
+  intRows: number;
+  intBatch: number;
+  blobCount: number;
+  blobSize: number;
 }
 
 interface BenchWorkerData extends BenchConfig {
   index: number;
+  // Per-worker completed-op counters (one Int32 slot per worker). Each worker
+  // writes only its own slot; main reads all slots for progress checkpoints.
+  progressBuf: SharedArrayBuffer;
+}
+
+interface WorkloadMeta {
+  name: string;
+  unit: string;
+  blob: boolean;
+}
+
+function workloadMeta(w: number): WorkloadMeta {
+  switch (w) {
+    case 1:
+      return { name: "int-insert", unit: "rows/s", blob: false };
+    case 2:
+      return { name: "int-read", unit: "rows/s", blob: false };
+    case 3:
+      return { name: "blob-insert", unit: "blobs/s", blob: true };
+    case 4:
+      return { name: "blob-read", unit: "blobs/s", blob: true };
+    default:
+      console.error(`invalid BENCH_WORKLOAD: ${w} (must be 1..4)`);
+      process.exit(1);
+  }
 }
 
 type MainToWorkerMsg = { type: "start" };
 
 type WorkerToMainMsg =
   | { type: "ready" }
-  | { type: "done"; latencies: Float64Array; retries: number }
+  | { type: "done"; latencies: Float64Array; ops: number }
   | { type: "error"; message: string };
 
 interface WorkerResult {
   latencies: Float64Array;
-  retries: number;
-}
-
-function isRetryable(err: unknown): boolean {
-  if (typeof err !== "object" || err === null) return false;
-  const errno = (err as { errno?: unknown }).errno;
-  return typeof errno === "number" && RETRYABLE.has(errno);
+  ops: number;
 }
 
 function errText(err: unknown): string {
@@ -97,90 +110,130 @@ async function workerRun(): Promise<void> {
   const d = workerData as BenchWorkerData;
 
   // Own PRNG stream: 31-bit LCG, state seeded BENCH_SEED + worker index.
-  // state * 1103515245 exceeds 2^53, so the step is done in BigInt.
-  // Verified (seed 42): rand(100) -> 27, 64, 53, 6, 35.
+  // state * 1103515245 exceeds 2^53, so the step is done in BigInt; the
+  // returned state is < 2^31 and so fits exactly in a JS number.
+  // (Validation, seed 42 worker 0: first next() = 1250496027.)
   let state = BigInt(d.seed + d.index);
-  const rand = (n: number): number => {
+  const next = (): number => {
     state = (state * 1103515245n + 12345n) % 2147483648n;
-    return Number(state % BigInt(n));
+    return Number(state);
   };
 
-  const N = d.tableRows;
-  const R = d.rangeSize;
+  const progress = new Int32Array(d.progressBuf);
+  const publish = (n: number): void => {
+    Atomics.store(progress, d.index, n);
+  };
 
-  const conn = await createConnection({
+  const connOpts: ConnectionOptions & { maxAllowedPacket?: number } = {
     host: d.host,
     port: d.port,
     user: d.user,
     password: d.password,
     database: d.database,
     // mysql2 runs plaintext unless `ssl` is set — TLS disabled per SPEC.
-  });
+    maxAllowedPacket: MAX_ALLOWED_PACKET,
+  };
+  const conn = await createConnection(connOpts);
 
-  let retries = 0;
+  // Black-box sink so app-side sums / MD5 digests are not optimized away.
+  let sink = 0;
 
-  // One transaction attempt; values drawn immediately before each statement
-  // (draw order = execution order). Every SELECT fetches all rows (mysql2
-  // resolves .execute() with the complete row array).
-  async function attempt(): Promise<void> {
-    await conn.query("BEGIN");
-    for (let i = 0; i < 10; i++) {
-      const [rows] = await conn.execute<RowDataPacket[]>(SQL_POINT, [
-        1 + rand(N),
-      ]);
-      void rows.length;
-    }
-    let lo = 1 + rand(N);
-    let [rows] = await conn.execute<RowDataPacket[]>(SQL_RANGE, [
-      lo,
-      lo + R - 1,
-    ]);
-    void rows.length;
-    lo = 1 + rand(N);
-    [rows] = await conn.execute<RowDataPacket[]>(SQL_SUM, [lo, lo + R - 1]);
-    void rows[0]; // SUM(k) may arrive as string or null — just read it
-    lo = 1 + rand(N);
-    [rows] = await conn.execute<RowDataPacket[]>(SQL_ORDER, [lo, lo + R - 1]);
-    void rows.length;
-    lo = 1 + rand(N);
-    [rows] = await conn.execute<RowDataPacket[]>(SQL_DISTINCT, [
-      lo,
-      lo + R - 1,
-    ]);
-    void rows.length;
-    await conn.execute(SQL_IDX_UPDATE, [1 + rand(N)]);
-    await conn.execute(SQL_NONIDX_UPDATE, [C_VAL, 1 + rand(N)]);
-    const rowId = 1 + rand(N);
-    const k = rand(N);
-    await conn.execute(SQL_DELETE, [rowId]);
-    await conn.execute(SQL_INSERT, [rowId, k, C_VAL, PAD_VAL]);
-    await conn.query("COMMIT");
-  }
+  // One latency sample per operation, integer microseconds (truncated via
+  // BigInt division). Sizing and the timed body depend on the workload.
+  let latencies: Float64Array = new Float64Array(0);
+  let ops = 0;
 
-  // Re-run (with freshly drawn values) until it commits.
-  async function txn(): Promise<void> {
-    for (;;) {
-      try {
-        await attempt();
-        return;
-      } catch (err) {
-        if (isRetryable(err)) {
-          await conn.query("ROLLBACK").catch(() => {}); // ignore rollback errors
-          retries++;
-          continue;
+  const runWorkload = async (): Promise<void> => {
+    switch (d.workload) {
+      case 1: {
+        // Integer insert: one prepared multi-row INSERT of intBatch rows,
+        // executed intRows / intBatch times. Autocommit ON — each INSERT is
+        // its own commit; no wrapping BEGIN/COMMIT (SPEC, identical per lang).
+        const batch = d.intBatch;
+        const stmts = Math.floor(d.intRows / batch);
+        const sql =
+          "INSERT INTO bench_int (val) VALUES " +
+          new Array(batch).fill("(?)").join(",");
+        latencies = new Float64Array(stmts);
+        ops = stmts * batch;
+        const params = new Array<number>(batch);
+        let done = 0;
+        for (let s = 0; s < stmts; s++) {
+          for (let j = 0; j < batch; j++) params[j] = next() | 0; // signed int32
+          const t0 = process.hrtime.bigint();
+          await conn.execute(sql, params);
+          latencies[s] = Number((process.hrtime.bigint() - t0) / 1000n);
+          done += batch;
+          publish(done);
         }
-        throw err;
+        break;
       }
+      case 2: {
+        // Integer fetch + sum: one scan per worker, sum val in app code.
+        const sql = `SELECT val FROM bench_int LIMIT ${d.intRows}`;
+        latencies = new Float64Array(1);
+        const t0 = process.hrtime.bigint();
+        const [rows] = await conn.execute<RowDataPacket[]>(sql);
+        let sum = 0; // 64-bit accumulator (double is exact for these sums)
+        for (const row of rows) sum += Number(row.val);
+        latencies[0] = Number((process.hrtime.bigint() - t0) / 1000n);
+        sink += sum;
+        ops = rows.length;
+        publish(ops);
+        break;
+      }
+      case 3: {
+        // Blob insert + MD5. Fill the buffer once per worker with a fast
+        // native CSPRNG (not a per-byte interpreted loop), then before each
+        // blob overwrite its first 8 bytes with the blob id so every blob's
+        // content (and MD5) differs. MD5 hashes the full buffer each time.
+        // Autocommit ON — each INSERT commits on its own (SPEC). Latency = the
+        // INSERT.
+        const count = d.blobCount;
+        const sql = "INSERT INTO bench_blob (id, data) VALUES (?, ?)";
+        latencies = new Float64Array(count);
+        ops = count;
+        const buf = Buffer.allocUnsafe(d.blobSize);
+        randomFillSync(buf); // once per worker
+        for (let k = 0; k < count; k++) {
+          const id = d.index * count + k;
+          buf.writeBigUInt64LE(BigInt(id), 0); // first 8 bytes = blob id
+          sink += createHash("md5").update(buf).digest("hex").charCodeAt(0);
+          const t0 = process.hrtime.bigint();
+          await conn.execute(sql, [id, buf]);
+          latencies[k] = Number((process.hrtime.bigint() - t0) / 1000n);
+          publish(k + 1);
+        }
+        break;
+      }
+      case 4: {
+        // Blob read + MD5: read own blobs by id range, MD5 each in app.
+        // Latency = the SELECT (MD5 computed outside the sample, per SPEC).
+        const count = d.blobCount;
+        const sql = "SELECT data FROM bench_blob WHERE id = ?";
+        latencies = new Float64Array(count);
+        ops = count;
+        for (let k = 0; k < count; k++) {
+          const id = d.index * count + k;
+          const t0 = process.hrtime.bigint();
+          const [rows] = await conn.execute<RowDataPacket[]>(sql, [id]);
+          latencies[k] = Number((process.hrtime.bigint() - t0) / 1000n);
+          const data = rows[0].data as Buffer;
+          sink += createHash("md5").update(data).digest("hex").charCodeAt(0);
+          publish(k + 1);
+        }
+        break;
+      }
+      default:
+        throw new Error(`invalid BENCH_WORKLOAD: ${d.workload}`);
     }
-  }
-
-  for (let j = 0; j < d.warmupTxns; j++) {
-    await txn();
-  }
-  retries = 0; // report retries from the timed window only
+  };
 
   // Barrier: signal ready, wait for start (listener installed before ready
-  // is posted so the start message can never be missed).
+  // is posted so the start message can never be missed). Connection and
+  // statement preparation (first .execute per SQL) stay outside the window;
+  // the first prepare happens inside the timed loop, matching the JS impl —
+  // it is a one-time cost per worker and negligible against the full load.
   const started = new Promise<void>((resolve) => {
     port.on("message", (msg: unknown) => {
       if (
@@ -196,34 +249,12 @@ async function workerRun(): Promise<void> {
   port.postMessage(readyMsg);
   await started;
 
-  // Latency storage (integer microseconds, truncated). Events mode uses a
-  // pre-allocated array; duration mode grows dynamically and is converted to
-  // a Float64Array for zero-copy transfer.
-  let latencies: Float64Array;
-  if (d.durationS > 0) {
-    // Duration mode: run until the deadline, checked before each new
-    // transaction; a transaction in flight at the deadline (retries
-    // included) runs to successful commit.
-    const timed: number[] = [];
-    const start = process.hrtime.bigint();
-    const deadline = start + BigInt(d.durationS) * 1000000000n;
-    while (process.hrtime.bigint() < deadline) {
-      const t0 = process.hrtime.bigint();
-      await txn();
-      timed.push(Number((process.hrtime.bigint() - t0) / 1000n));
-    }
-    latencies = Float64Array.from(timed);
-  } else {
-    // Events mode: exactly BENCH_TXNS_PER_THREAD timed transactions.
-    latencies = new Float64Array(d.txnsPerThread);
-    for (let j = 0; j < d.txnsPerThread; j++) {
-      const t0 = process.hrtime.bigint();
-      await txn();
-      latencies[j] = Number((process.hrtime.bigint() - t0) / 1000n);
-    }
-  }
+  await runWorkload();
 
-  const doneMsg: WorkerToMainMsg = { type: "done", latencies, retries };
+  // Force the sink to be observed so the sums / digests cannot be elided.
+  if (!Number.isFinite(sink)) throw new Error("sink not finite");
+
+  const doneMsg: WorkerToMainMsg = { type: "done", latencies, ops };
   port.postMessage(doneMsg, [latencies.buffer as ArrayBuffer]);
   await conn.end();
   port.close(); // drain the event loop so the worker exits (code 0)
@@ -252,7 +283,7 @@ function getenvInt(name: string): number {
 // Optional integer environment variable: defaults when unset, but a value
 // that is present must still be a valid integer.
 function getenvIntOpt(name: string, def: number): number {
-  if (process.env[name] === undefined) return def;
+  if (process.env[name] === undefined || process.env[name] === "") return def;
   return getenvInt(name);
 }
 
@@ -277,22 +308,35 @@ async function main(): Promise<void> {
     user: getenvStr("MYSQL_USER"),
     password: getenvStr("MYSQL_PASSWORD"),
     database: getenvStr("MYSQL_DB"),
-    tableRows: getenvInt("BENCH_TABLE_ROWS"),
-    rangeSize: getenvInt("BENCH_RANGE_SIZE"),
-    warmupTxns: getenvInt("BENCH_WARMUP_TXNS"),
-    txnsPerThread: getenvInt("BENCH_TXNS_PER_THREAD"),
-    durationS: getenvIntOpt("BENCH_DURATION_S", 0),
+    workload: getenvInt("BENCH_WORKLOAD"),
     seed: getenvInt("BENCH_SEED"),
+    intRows: getenvIntOpt("BENCH_INT_ROWS", 1000000),
+    intBatch: getenvIntOpt("BENCH_INT_BATCH", 10),
+    blobCount: getenvIntOpt("BENCH_BLOB_COUNT", 100),
+    blobSize: getenvIntOpt("BENCH_BLOB_SIZE", 1048576),
   };
   const threads = getenvInt("BENCH_THREADS");
-  if (threads < 1 || (cfg.durationS === 0 && cfg.txnsPerThread < 1)) {
-    console.error("BENCH_THREADS and BENCH_TXNS_PER_THREAD must be >= 1");
+  const meta = workloadMeta(cfg.workload);
+
+  if (threads < 1) {
+    console.error("BENCH_THREADS must be >= 1");
     process.exit(1);
   }
-  if (cfg.durationS < 0) {
-    console.error("BENCH_DURATION_S must be >= 0");
+  if (!meta.blob && (cfg.intRows < 1 || cfg.intBatch < 1)) {
+    console.error("BENCH_INT_ROWS and BENCH_INT_BATCH must be >= 1");
     process.exit(1);
   }
+  if (meta.blob && (cfg.blobCount < 1 || cfg.blobSize < 1)) {
+    console.error("BENCH_BLOB_COUNT and BENCH_BLOB_SIZE must be >= 1");
+    process.exit(1);
+  }
+
+  // Progress checkpoint (kill / long-run recovery). Skipped when unset/empty.
+  const progressFile = process.env.BENCH_PROGRESS_FILE ?? "";
+  const progressSec = getenvIntOpt("BENCH_PROGRESS_SEC", 5);
+
+  const progressBuf = new SharedArrayBuffer(threads * 4);
+  const progress = new Int32Array(progressBuf);
 
   const scriptPath = fileURLToPath(import.meta.url);
   const workers: Worker[] = [];
@@ -301,6 +345,31 @@ async function main(): Promise<void> {
   const workerErrors: string[] = [];
   let tStart = 0n;
   let tEnd = 0n;
+  let progressTimer: NodeJS.Timeout | undefined;
+
+  const writeProgress = (): void => {
+    let ops = 0;
+    for (let i = 0; i < threads; i++) ops += Atomics.load(progress, i);
+    const elapsed = Number(process.hrtime.bigint() - tStart) / 1e9;
+    const throughput = elapsed > 0 ? ops / elapsed : 0;
+    const line = JSON.stringify({
+      workload: cfg.workload,
+      workload_name: meta.name,
+      unit: meta.unit,
+      threads,
+      ops,
+      elapsed_s: Number(elapsed.toFixed(3)),
+      throughput: Number(throughput.toFixed(1)),
+      partial: true,
+    });
+    const tmp = `${progressFile}.tmp`;
+    try {
+      fs.writeFileSync(tmp, line + "\n");
+      fs.renameSync(tmp, progressFile); // atomic replace over FILE
+    } catch (err) {
+      console.error(`progress checkpoint failed: ${errText(err)}`);
+    }
+  };
 
   await new Promise<void>((resolve, reject) => {
     let readyCount = 0;
@@ -308,11 +377,11 @@ async function main(): Promise<void> {
     let spawned = 0;
     // Spawning hundreds of isolates at once exhausts file descriptors while
     // they race through module loading; stagger startup in batches. Startup
-    // and warmup are pre-barrier, so the timed window is unaffected.
+    // is pre-barrier, so the timed window is unaffected.
     const SPAWN_BATCH = 64;
 
     const spawnOne = (i: number): void => {
-      const wd: BenchWorkerData = { index: i, ...cfg };
+      const wd: BenchWorkerData = { index: i, progressBuf, ...cfg };
       const w = new Worker(scriptPath, { workerData: wd });
       workers.push(w);
       exitPromises.push(new Promise<number>((res) => w.once("exit", res)));
@@ -325,16 +394,21 @@ async function main(): Promise<void> {
             spawnNextBatch();
           }
           if (readyCount === threads) {
-            // All workers connected and warmed up: start the timed window.
+            // All workers connected: start the timed window and the progress
+            // checkpoint timer.
             tStart = process.hrtime.bigint();
+            if (progressFile !== "" && progressSec > 0) {
+              progressTimer = setInterval(writeProgress, progressSec * 1000);
+            }
             const startMsg: MainToWorkerMsg = { type: "start" };
             for (const ww of workers) ww.postMessage(startMsg);
           }
         } else if (msg.type === "done") {
-          results[i] = { latencies: msg.latencies, retries: msg.retries };
+          results[i] = { latencies: msg.latencies, ops: msg.ops };
           doneCount++;
           if (doneCount === threads) {
             tEnd = process.hrtime.bigint();
+            if (progressTimer !== undefined) clearInterval(progressTimer);
             resolve();
           }
         } else if (msg.type === "error") {
@@ -374,24 +448,24 @@ async function main(): Promise<void> {
 
   const elapsedS = Number(tEnd - tStart) / 1e9;
 
-  // txns = total committed timed transactions across workers. In events mode
-  // every worker contributes exactly cfg.txnsPerThread; in duration mode the
-  // counts vary per worker, so merge by actual lengths.
+  // ops = total operations across workers (rows for WL1/2, blobs for WL3/4).
   const collected: WorkerResult[] = [];
-  let txns = 0;
-  let totalRetries = 0;
+  let ops = 0;
   for (const r of results) {
     if (r === undefined) {
       console.error("internal error: missing worker result");
       process.exit(1);
     }
     collected.push(r);
-    txns += r.latencies.length;
-    totalRetries += r.retries;
+    ops += r.ops;
   }
-  const tps = txns / elapsedS;
+  const throughput = ops / elapsedS;
+  const mbPerS = meta.blob ? (ops * cfg.blobSize) / 1e6 / elapsedS : 0;
 
-  const merged = new Float64Array(txns);
+  // Merge, sort, percentiles: p(x) = arr[ceil(x/100 * n) - 1], max = arr[n-1].
+  let total = 0;
+  for (const r of collected) total += r.latencies.length;
+  const merged = new Float64Array(total);
   let off = 0;
   for (const r of collected) {
     merged.set(r.latencies, off);
@@ -399,35 +473,48 @@ async function main(): Promise<void> {
   }
   merged.sort(); // TypedArray sort is numeric ascending
   const n = merged.length;
-  const p = (x: number): number => merged[Math.ceil((x / 100) * n) - 1];
+  const p = (x: number): number =>
+    n === 0 ? 0 : merged[Math.ceil((x / 100) * n) - 1];
+  const maxUs = n === 0 ? 0 : merged[n - 1];
 
   const driverVersion = readPkgVersion("../node_modules/mysql2/package.json");
-  const tscVersion = readPkgVersion(
-    "../node_modules/typescript/package.json",
-  );
+  const tscVersion = readPkgVersion("../node_modules/typescript/package.json");
   const runtimeVersion = `node ${process.version} / tsc ${tscVersion}`;
 
-  // Manual template so elapsed_s/tps/qps always carry their decimals and the
-  // field order matches SPEC.md exactly.
+  // Manual template so throughput/mb_per_s/elapsed_s always carry their
+  // decimals and the field order matches SPEC.md exactly.
   const line =
-    `{"lang":"typescript","driver":"mysql2"` +
+    `{"lang":"typescript"` +
+    `,"workload":${cfg.workload}` +
+    `,"workload_name":${JSON.stringify(meta.name)}` +
+    `,"unit":${JSON.stringify(meta.unit)}` +
+    `,"driver":"mysql2"` +
     `,"driver_version":${JSON.stringify(driverVersion)}` +
     `,"runtime_version":${JSON.stringify(runtimeVersion)}` +
     `,"prepared":true` +
     `,"client_host":${JSON.stringify(os.hostname())}` +
     `,"db_host":${JSON.stringify(cfg.host)}` +
     `,"threads":${threads}` +
-    `,"txns":${txns}` +
-    `,"retries":${totalRetries}` +
+    `,"ops":${ops}` +
     `,"errors":0` +
     `,"elapsed_s":${elapsedS.toFixed(3)}` +
-    `,"tps":${tps.toFixed(1)}` +
-    `,"qps":${(tps * 20).toFixed(1)}` +
+    `,"throughput":${throughput.toFixed(1)}` +
+    `,"mb_per_s":${meta.blob ? mbPerS.toFixed(1) : "0"}` +
     `,"p50_us":${p(50)}` +
     `,"p95_us":${p(95)}` +
     `,"p99_us":${p(99)}` +
-    `,"max_us":${merged[n - 1]}}`;
+    `,"max_us":${maxUs}` +
+    `,"client_cpu_s":0,"server_cpu_s":0}`;
   console.log(line);
+
+  // Final JSON is on stdout now; the progress file's data is superseded.
+  if (progressFile !== "") {
+    try {
+      fs.unlinkSync(progressFile);
+    } catch {
+      /* already gone — fine */
+    }
+  }
 }
 
 if (isMainThread) {

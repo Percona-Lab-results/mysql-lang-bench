@@ -1,0 +1,11 @@
+// OpenSSL's MD5 primitive via libcrypto. Ubuntu 24.04 ships the headers under
+// /usr/include/openssl with no dedicated .pc for just libcrypto, so — exactly
+// as with CMySQL — the module map names the header by absolute path and links
+// the library directly. md5.h declares MD5(d,n,md) (deprecated in OpenSSL 3.0
+// but still exported by libcrypto.so.3); the deprecation attribute imports into
+// Swift as @available(deprecated), which is a warning, not an error.
+module CCrypto [system] {
+    header "/usr/include/openssl/md5.h"
+    link "crypto"
+    export *
+}

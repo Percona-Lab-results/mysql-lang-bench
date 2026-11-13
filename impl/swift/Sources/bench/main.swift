@@ -1,23 +1,43 @@
 /*
- * mysql-lang-bench — Swift implementation (v2, multithreaded oltp_read_write).
+ * mysql-lang-bench — Swift implementation (v3, four micro-workloads).
  *
  * Same driver as the C/C++ implementations: the libmysqlclient C API (via the
  * CMySQL system-library module) with mysql_stmt_* server-side prepared
  * statements, and the same API usage — MYSQL_BIND arrays bound once per
- * statement, value buffers rewritten before each execute, fetch to
- * MYSQL_NO_DATA, SSL_MODE_DISABLED + TCP + GET_SERVER_PUBLIC_KEY.
+ * statement with value/result buffers at stable heap addresses, fetch loops to
+ * MYSQL_NO_DATA, SSL_MODE_DISABLED + TCP + GET_SERVER_PUBLIC_KEY. MD5 is
+ * computed with OpenSSL's MD5() from libcrypto (the CCrypto module).
  *
- * See SPEC.md: BENCH_THREADS workers (one OS thread each, Foundation Thread),
- * each with its own connection, its own 18 prepared statements and its own
- * PRNG stream, run a sysbench-oltp_read_write-style transaction loop.
- * One JSON line on stdout.
+ * BENCH_WORKLOAD (1..4) selects one of:
+ *   1 int-insert   prepared multi-row INSERT of BENCH_INT_BATCH rows,
+ *                  BENCH_INT_ROWS/BENCH_INT_BATCH times, committed once.
+ *   2 int-read     SELECT val ... LIMIT BENCH_INT_ROWS, sum in app code.
+ *   3 blob-insert  one BENCH_BLOB_SIZE buffer filled once per worker with a
+ *                  fast bulk LCG fill; before each of BENCH_BLOB_COUNT blobs
+ *                  its first 8 bytes are overwritten with the id, then MD5 the
+ *                  whole buffer and INSERT (id, data). Autocommit per INSERT.
+ *   4 blob-read    read own BENCH_BLOB_COUNT blobs by id, MD5 each.
  *
- * All MYSQL_BIND arrays and the value/result buffers they point at are
- * manually allocated per worker and stay alive (at stable addresses) for the
- * worker's whole lifetime — never Swift arrays or stack storage, which could
- * move or be copied.
+ * BENCH_THREADS workers, each a Foundation Thread with its own MYSQL*, its own
+ * prepared statement(s) and its own PRNG stream. Workers connect + prepare,
+ * meet at a pthread_barrier; main releases it, samples a monotonic clock
+ * (t_start), waits for every worker, samples t_end. Connection/prepare are
+ * outside the timed window. One JSON line on stdout; any SQL/connection error
+ * goes to stderr and exits non-zero (no retries — these workloads have no
+ * concurrency conflicts).
+ *
+ * Intermediate progress: when BENCH_PROGRESS_FILE is set, each worker publishes
+ * its own completed-operation count to a per-worker Int64 slot it alone writes
+ * (no lock); a monitor Thread sums the slots every BENCH_PROGRESS_SEC seconds
+ * and atomically overwrites the file (write .tmp, rename over it) with a
+ * partial JSON line. On success the file is deleted.
+ *
+ * All MYSQL_BIND arrays and the value/result buffers they point at are manually
+ * heap-allocated and stay at stable addresses for the statement's lifetime —
+ * never Swift arrays or stack storage, which could move or be copied.
  */
 
+import CCrypto
 import CMySQL
 import Dispatch
 import Foundation
@@ -57,12 +77,6 @@ func dieStmt(_ st: MySQLStmt, _ what: String) -> Never {
     fail("\(what) failed: (\(mysql_stmt_errno(st))) \(String(cString: mysql_stmt_error(st)))")
 }
 
-/* Retryable concurrency errors per SPEC: deadlock, lock wait timeout,
-   duplicate key on the insert. */
-func errRetryable(_ e: UInt32) -> Bool {
-    return e == 1213 || e == 1205 || e == 1062
-}
-
 /* ---------------- env parsing -------------------------------------------- */
 
 func envStr(_ name: String) -> String {
@@ -81,13 +95,20 @@ func envInt(_ name: String) -> Int {
 }
 
 func envIntDefault(_ name: String, _ def: Int) -> Int {
-    guard let v = ProcessInfo.processInfo.environment[name] else {
+    guard let v = ProcessInfo.processInfo.environment[name], !v.isEmpty else {
         return def
     }
     guard let n = Int(v) else {
         fail("environment variable \(name) is not an integer: '\(v)'")
     }
     return n
+}
+
+func envStrOptional(_ name: String) -> String? {
+    guard let v = ProcessInfo.processInfo.environment[name], !v.isEmpty else {
+        return nil
+    }
+    return v
 }
 
 /* ---------------- timing -------------------------------------------------- */
@@ -102,194 +123,112 @@ func nowNs() -> Int64 {
 
 /* p(x) = arr[ceil(x/100 * n) - 1], arr sorted ascending, 0-based index */
 func percentile(_ arr: [Int64], _ x: Int) -> Int64 {
+    if arr.isEmpty { return 0 }
     var idx = (x * arr.count + 99) / 100 - 1
     if idx < 0 { idx = 0 }
+    if idx >= arr.count { idx = arr.count - 1 }
     return arr[idx]
 }
 
 /* ---------------- shared, read-only workload config ----------------------- */
 /* Globals are assigned once in main() before any worker thread starts and are
-   read-only afterwards. */
+   read-only afterwards (except the progress slots / stop flag, which use the
+   publish-to-own-slot discipline described in the file header). */
 
 var cfgHost = ""
 var cfgUser = ""
 var cfgPassword = ""
 var cfgDb = ""
 var cfgPort = 0
-var tableRows = 0
+
+var workload = 0
 var nThreads = 0
-var warmupTxns = 0
-var txnsPerThread = 0
-var rangeSize = 0
 var baseSeed = 0
-var durationS = 0 /* 0 → events mode, > 0 → duration mode (BENCH_DURATION_S) */
+var intRows = 0
+var intBatch = 0
+var blobCount = 0
+var blobSize = 0
 
-/* Constant string parameters, read-only after init — safe to share across
-   workers (as in the C implementation). Heap-allocated so the MYSQL_BIND
-   buffer/length pointers are stable. */
-var cValBuf: UnsafeMutablePointer<CChar>! = nil   /* "abcdefghij" x 12 */
-var cValLen: UnsafeMutablePointer<UInt>! = nil    /* 120 */
-var padValBuf: UnsafeMutablePointer<CChar>! = nil /* "0123456789" x 6 */
-var padValLen: UnsafeMutablePointer<UInt>! = nil  /* 60 */
-
-func makeCBuf(_ s: String) -> UnsafeMutablePointer<CChar> {
-    let bytes = Array(s.utf8)
-    let p = UnsafeMutablePointer<CChar>.allocate(capacity: bytes.count + 1)
-    for (i, b) in bytes.enumerated() { p[i] = CChar(bitPattern: b) }
-    p[bytes.count] = 0
-    return p
+/* workload metadata */
+func workloadName(_ w: Int) -> String {
+    switch w {
+    case 1: return "int-insert"
+    case 2: return "int-read"
+    case 3: return "blob-insert"
+    case 4: return "blob-read"
+    default: return "unknown"
+    }
+}
+func workloadUnit(_ w: Int) -> String {
+    return (w == 3 || w == 4) ? "blobs/s" : "rows/s"
 }
 
-/* Start barrier (workers + main), heap-allocated: a stable address every
-   thread can use without Swift inout-exclusivity conflicts. */
+/* Start barrier (workers + main), heap-allocated: a stable address every thread
+   can use without Swift inout-exclusivity conflicts. */
 var startBarrier: UnsafeMutablePointer<pthread_barrier_t>! = nil
 
 /* Each worker signals once when fully done; main waits nThreads times
    (Foundation Thread has no join). */
 let doneSem = DispatchSemaphore(value: 0)
 
-/* ---------------- per-worker state ---------------------------------------- */
+/* t_start, published once by main after the barrier releases, read by the
+   monitor thread. The monitor is created only after this is set. */
+var tStartNs: Int64 = 0
 
-/* The 18 server-side prepared statements, one set per worker. */
-let ST_POINT0 = 0 /* 10 point selects: ST_POINT0 .. ST_POINT0+9 */
-let ST_RANGE_SIMPLE = 10
-let ST_RANGE_SUM = 11
-let ST_RANGE_ORDER = 12
-let ST_RANGE_DISTINCT = 13
-let ST_UPD_INDEX = 14
-let ST_UPD_NONINDEX = 15
-let ST_DELETE = 16
-let ST_INSERT = 17
-let ST_COUNT = 18
+/* Per-worker completed-operation counters (rows for WL1/2, blobs for WL3/4).
+   One Int64 slot per worker; worker i writes only slots[i], the monitor reads
+   all. Stale reads are acceptable per SPEC. */
+var progressSlots: UnsafeMutablePointer<Int64>! = nil
+
+/* Monitor stop flag + completion handshake. */
+var progressStop: UnsafeMutablePointer<Int32>! = nil
+let monitorDone = DispatchSemaphore(value: 0)
+
+/* Black-box sink: MD5/sum results are folded in so the compiler cannot elide
+   the hashing/summing. Combined across workers and referenced after the run. */
+var globalSink: UInt64 = 0
+
+/* ---------------- PRNG: 31-bit LCG, identical in every language ----------- */
 
 final class Worker {
     let index: Int
     var prngState: Int64
-    var retries: Int64 = 0
 
     var conn: MySQLConn! = nil
-    var st: [MySQLStmt?] = Array(repeating: nil, count: ST_COUNT)
 
-    /* Parameter value buffers (bound once; values written before execute). */
-    let pointId: UnsafeMutablePointer<UInt32>       /* [10] */
-    let rangeLo: UnsafeMutablePointer<UInt32>       /* [4]: simple, sum, order, distinct */
-    let rangeHi: UnsafeMutablePointer<UInt32>       /* [4] */
-    let updIndexId: UnsafeMutablePointer<UInt32>
-    let updNonindexId: UnsafeMutablePointer<UInt32>
-    let delId: UnsafeMutablePointer<UInt32>
-    let insId: UnsafeMutablePointer<UInt32>
-    let insK: UnsafeMutablePointer<UInt32>
-
-    /* Result buffers. One worker runs its statements strictly sequentially,
-       so the selects returning column c can share one row buffer. */
-    let rowC: UnsafeMutablePointer<CChar>           /* [512]; CHAR(120) */
-    let rowCLen: UnsafeMutablePointer<UInt>
-    let sumBuf: UnsafeMutablePointer<CChar>         /* [80]; SUM(k) as DECIMAL text */
-    let sumLen: UnsafeMutablePointer<UInt>
-    let sumIsNull: UnsafeMutablePointer<Bool>
-
-    /* MYSQL_BIND arrays kept alive for the worker's whole lifetime. */
-    let bpPoint: UnsafeMutablePointer<MYSQL_BIND>       /* [10] (1 param each) */
-    let brPoint: UnsafeMutablePointer<MYSQL_BIND>       /* [10] (1 result each) */
-    let bpRange: UnsafeMutablePointer<MYSQL_BIND>       /* [4][2] -> flat [8] */
-    let brRangeC: UnsafeMutablePointer<MYSQL_BIND>      /* [3]: simple, order, distinct */
-    let brSum: UnsafeMutablePointer<MYSQL_BIND>         /* [1] */
-    let bpUpdIndex: UnsafeMutablePointer<MYSQL_BIND>    /* [1] */
-    let bpUpdNonindex: UnsafeMutablePointer<MYSQL_BIND> /* [2] */
-    let bpDel: UnsafeMutablePointer<MYSQL_BIND>         /* [1] */
-    let bpIns: UnsafeMutablePointer<MYSQL_BIND>         /* [4] */
-
-    /* Per-worker latency storage, owned exclusively by this worker's thread
-       during the run and read by main() only after the worker is done.
-       Events mode: pre-allocated to txnsPerThread and never grown.
-       Duration mode: grown realloc-style (double, copy, free old) by record(). */
-    var lat: UnsafeMutablePointer<Int64>
-    var latCap: Int
+    /* Per-worker latency storage, pre-sized to the exact sample count (the
+       counts are fixed per workload — no growth needed). */
+    let lat: UnsafeMutablePointer<Int64>
+    let latCap: Int
     var latCount: Int = 0
+
+    /* Completed-op count for the final `ops` tally (also mirrored live into the
+       worker's progress slot during the run). */
+    var opsDone: Int64 = 0
+
+    /* Per-worker black-box sink (folded into globalSink after the run). */
+    var sink: UInt64 = 0
 
     init(index: Int, seed: Int, latCapacity: Int) {
         self.index = index
         self.prngState = Int64(seed)
-
-        func allocU32(_ n: Int) -> UnsafeMutablePointer<UInt32> {
-            let p = UnsafeMutablePointer<UInt32>.allocate(capacity: n)
-            p.initialize(repeating: 0, count: n)
-            return p
-        }
-        func allocBind(_ n: Int) -> UnsafeMutablePointer<MYSQL_BIND> {
-            let p = UnsafeMutablePointer<MYSQL_BIND>.allocate(capacity: n)
-            p.initialize(repeating: MYSQL_BIND(), count: n) /* zeroed, like memset */
-            return p
-        }
-
-        pointId = allocU32(10)
-        rangeLo = allocU32(4)
-        rangeHi = allocU32(4)
-        updIndexId = allocU32(1)
-        updNonindexId = allocU32(1)
-        delId = allocU32(1)
-        insId = allocU32(1)
-        insK = allocU32(1)
-
-        rowC = UnsafeMutablePointer<CChar>.allocate(capacity: 512)
-        rowC.initialize(repeating: 0, count: 512)
-        rowCLen = UnsafeMutablePointer<UInt>.allocate(capacity: 1)
-        rowCLen.initialize(to: 0)
-        sumBuf = UnsafeMutablePointer<CChar>.allocate(capacity: 80)
-        sumBuf.initialize(repeating: 0, count: 80)
-        sumLen = UnsafeMutablePointer<UInt>.allocate(capacity: 1)
-        sumLen.initialize(to: 0)
-        sumIsNull = UnsafeMutablePointer<Bool>.allocate(capacity: 1)
-        sumIsNull.initialize(to: false)
-
-        bpPoint = allocBind(10)
-        brPoint = allocBind(10)
-        bpRange = allocBind(8)
-        brRangeC = allocBind(3)
-        brSum = allocBind(1)
-        bpUpdIndex = allocBind(1)
-        bpUpdNonindex = allocBind(2)
-        bpDel = allocBind(1)
-        bpIns = allocBind(4)
-
-        latCap = latCapacity
-        lat = UnsafeMutablePointer<Int64>.allocate(capacity: latCapacity)
-        lat.initialize(repeating: 0, count: latCapacity)
+        self.latCap = max(latCapacity, 1)
+        lat = UnsafeMutablePointer<Int64>.allocate(capacity: self.latCap)
+        lat.initialize(repeating: 0, count: self.latCap)
     }
 
-    /* Append one timed-transaction latency (integer microseconds), growing the
-       buffer when full. Only this worker's thread calls it. */
     @inline(__always)
     func record(_ us: Int64) {
-        if latCount == latCap {
-            let newCap = latCap * 2
-            let p = UnsafeMutablePointer<Int64>.allocate(capacity: newCap)
-            p.initialize(from: lat, count: latCount)
-            (p + latCount).initialize(repeating: 0, count: newCap - latCount)
-            lat.deallocate()
-            lat = p
-            latCap = newCap
+        if latCount < latCap {
+            lat[latCount] = us
+            latCount += 1
         }
-        lat[latCount] = us
-        latCount += 1
     }
 
-    /* Called from main() after the worker thread has finished (it closed the
-       statements and the connection itself). */
     func cleanup() {
-        pointId.deallocate(); rangeLo.deallocate(); rangeHi.deallocate()
-        updIndexId.deallocate(); updNonindexId.deallocate()
-        delId.deallocate(); insId.deallocate(); insK.deallocate()
-        rowC.deallocate(); rowCLen.deallocate()
-        sumBuf.deallocate(); sumLen.deallocate(); sumIsNull.deallocate()
-        bpPoint.deallocate(); brPoint.deallocate(); bpRange.deallocate()
-        brRangeC.deallocate(); brSum.deallocate(); bpUpdIndex.deallocate()
-        bpUpdNonindex.deallocate(); bpDel.deallocate(); bpIns.deallocate()
         lat.deallocate()
     }
 }
-
-/* ---------------- PRNG: 31-bit LCG, identical in every language ----------- */
 
 @inline(__always)
 func prngNext(_ w: Worker) -> Int64 {
@@ -299,9 +238,41 @@ func prngNext(_ w: Worker) -> Int64 {
     return w.prngState
 }
 
+/* ---------------- MD5 helper --------------------------------------------- */
+
+/* Fold the 32 lowercase hex characters of a 16-byte MD5 digest into a sink so
+   the hex formatting (required by SPEC) is actually computed, not elided. */
+let hexDigits: [UInt8] = Array("0123456789abcdef".utf8)
+
 @inline(__always)
-func prngRand(_ w: Worker, _ n: Int) -> Int { /* uniform 0..n-1 */
-    return Int(prngNext(w) % Int64(n))
+func foldHexDigest(_ md: UnsafePointer<UInt8>, _ sink: inout UInt64) {
+    for i in 0..<16 {
+        let b = md[i]
+        sink = sink &* 31 &+ UInt64(hexDigits[Int(b >> 4)])
+        sink = sink &* 31 &+ UInt64(hexDigits[Int(b & 0x0f)])
+    }
+}
+
+/* Fast bulk pseudo-random fill: a 64-bit LCG (SplitMix64-style constants)
+   writing 8 bytes per step as native UInt64 words — NOT a per-byte interpreted
+   loop (SPEC §Workload 3). Done once per worker; the content need not match
+   other languages. `raw` is 8-byte aligned, so the UInt64 stores are aligned. */
+func fillBlobBuffer(_ raw: UnsafeMutableRawPointer, _ size: Int, seed: UInt64) {
+    var s = seed &+ 0x9E37_79B9_7F4A_7C15
+    let words = size / 8
+    for i in 0..<words {
+        s = s &* 6_364_136_223_846_793_005 &+ 1_442_695_040_888_963_407
+        raw.storeBytes(of: s, toByteOffset: i * 8, as: UInt64.self)
+    }
+    /* Tail bytes when size is not a multiple of 8 (default 1 MiB is). */
+    let bytes = raw.assumingMemoryBound(to: UInt8.self)
+    var j = words * 8
+    var t = s
+    while j < size {
+        bytes[j] = UInt8(truncatingIfNeeded: t)
+        t >>= 8
+        j += 1
+    }
 }
 
 /* ---------------- per-worker setup ----------------------------------------- */
@@ -316,20 +287,10 @@ func prepareStmt(_ conn: MySQLConn, _ sql: String) -> MySQLStmt {
     return stmt
 }
 
-func bindUIntParam(_ b: UnsafeMutablePointer<MYSQL_BIND>,
-                   _ value: UnsafeMutablePointer<UInt32>) {
-    b.pointee = MYSQL_BIND() /* zeroed */
-    b.pointee.buffer_type = MYSQL_TYPE_LONG
-    b.pointee.buffer = UnsafeMutableRawPointer(value)
-    b.pointee.is_unsigned = true
-}
-
-func bindCResult(_ b: UnsafeMutablePointer<MYSQL_BIND>, _ w: Worker) {
-    b.pointee = MYSQL_BIND() /* zeroed */
-    b.pointee.buffer_type = MYSQL_TYPE_STRING
-    b.pointee.buffer = UnsafeMutableRawPointer(w.rowC)
-    b.pointee.buffer_length = 512
-    b.pointee.length = w.rowCLen
+func allocBind(_ n: Int) -> UnsafeMutablePointer<MYSQL_BIND> {
+    let p = UnsafeMutablePointer<MYSQL_BIND>.allocate(capacity: n)
+    p.initialize(repeating: MYSQL_BIND(), count: n) /* zeroed, like memset */
+    return p
 }
 
 func workerConnect(_ w: Worker) {
@@ -358,262 +319,301 @@ func workerConnect(_ w: Worker) {
                           UInt32(cfgPort), nil, 0) == nil {
         dieMysql(conn, "mysql_real_connect")
     }
+    /* Autocommit ON (SPEC): WL1/WL3 commit per INSERT, no wrapping transaction. */
     if mysql_autocommit(conn, true) {
         dieMysql(conn, "mysql_autocommit")
     }
 }
 
-func workerPrepare(_ w: Worker) {
-    let conn: MySQLConn = w.conn
+/* ---------------- workload 1: integer insert ------------------------------- */
 
-    /* 10 point selects, each its own prepared statement (sysbench-style). */
-    for j in 0..<10 {
-        let st = prepareStmt(conn, "SELECT c FROM sbtest WHERE id = ?")
-        w.st[ST_POINT0 + j] = st
-        bindUIntParam(w.bpPoint + j, w.pointId + j)
-        if mysql_stmt_bind_param(st, w.bpPoint + j) {
-            dieStmt(st, "mysql_stmt_bind_param(point)")
+func runWorkload1(_ w: Worker) {
+    let iterations = intRows / intBatch
+
+    /* "INSERT INTO bench_int (val) VALUES (?),(?),…,(?)" with BENCH_INT_BATCH
+       placeholders. */
+    var sql = "INSERT INTO bench_int (val) VALUES "
+    for j in 0..<intBatch { sql += (j == 0 ? "(?)" : ",(?)") }
+    let stmt = prepareStmt(w.conn, sql)
+
+    /* One signed-32-bit value buffer per placeholder, bound once. */
+    let vals = UnsafeMutablePointer<Int32>.allocate(capacity: intBatch)
+    vals.initialize(repeating: 0, count: intBatch)
+    let binds = allocBind(intBatch)
+    for j in 0..<intBatch {
+        binds[j].buffer_type = MYSQL_TYPE_LONG
+        binds[j].buffer = UnsafeMutableRawPointer(vals + j)
+        binds[j].is_unsigned = false /* signed 32-bit */
+    }
+    if mysql_stmt_bind_param(stmt, binds) {
+        dieStmt(stmt, "mysql_stmt_bind_param(int-insert)")
+    }
+
+    _ = pthread_barrier_wait(startBarrier)
+
+    /* Autocommit ON: each multi-row INSERT is its own commit — NO wrapping
+       transaction (SPEC; the commit strategy must be identical in every
+       language, and the server does not fsync per commit). */
+    for _ in 0..<iterations {
+        for j in 0..<intBatch {
+            vals[j] = Int32(truncatingIfNeeded: prngNext(w))
         }
-        bindCResult(w.brPoint + j, w)
-        if mysql_stmt_bind_result(st, w.brPoint + j) {
-            dieStmt(st, "mysql_stmt_bind_result(point)")
+        let t0 = nowNs()
+        if mysql_stmt_execute(stmt) != 0 {
+            dieStmt(stmt, "int-insert execute")
         }
+        w.record((nowNs() - t0) / 1000)
+        w.opsDone += Int64(intBatch)
+        progressSlots[w.index] = w.opsDone
     }
 
-    /* 4 range selects: params (lo, hi) each. */
-    let rangeSql = [
-        "SELECT c FROM sbtest WHERE id BETWEEN ? AND ?",
-        "SELECT SUM(k) FROM sbtest WHERE id BETWEEN ? AND ?",
-        "SELECT c FROM sbtest WHERE id BETWEEN ? AND ? ORDER BY c",
-        "SELECT DISTINCT c FROM sbtest WHERE id BETWEEN ? AND ? ORDER BY c",
-    ]
-    for j in 0..<4 {
-        let st = prepareStmt(conn, rangeSql[j])
-        w.st[ST_RANGE_SIMPLE + j] = st
-        bindUIntParam(w.bpRange + j * 2, w.rangeLo + j)
-        bindUIntParam(w.bpRange + j * 2 + 1, w.rangeHi + j)
-        if mysql_stmt_bind_param(st, w.bpRange + j * 2) {
-            dieStmt(st, "mysql_stmt_bind_param(range)")
-        }
-    }
-
-    /* Result binds: column c for simple/order/distinct (shared row buffer). */
-    let cStmts = [ST_RANGE_SIMPLE, ST_RANGE_ORDER, ST_RANGE_DISTINCT]
-    for j in 0..<3 {
-        bindCResult(w.brRangeC + j, w)
-        if mysql_stmt_bind_result(w.st[cStmts[j]]!, w.brRangeC + j) {
-            dieStmt(w.st[cStmts[j]]!, "mysql_stmt_bind_result(range)")
-        }
-    }
-
-    /* SUM(k) over INT UNSIGNED yields DECIMAL; fetch it as a string buffer.
-       It is NULL when the range matches no rows (rows may be deleted by
-       concurrent workers), so bind is_null too. */
-    w.brSum.pointee = MYSQL_BIND()
-    w.brSum.pointee.buffer_type = MYSQL_TYPE_NEWDECIMAL
-    w.brSum.pointee.buffer = UnsafeMutableRawPointer(w.sumBuf)
-    w.brSum.pointee.buffer_length = 80
-    w.brSum.pointee.length = w.sumLen
-    w.brSum.pointee.is_null = w.sumIsNull
-    if mysql_stmt_bind_result(w.st[ST_RANGE_SUM]!, w.brSum) {
-        dieStmt(w.st[ST_RANGE_SUM]!, "mysql_stmt_bind_result(sum)")
-    }
-
-    /* Index update. */
-    w.st[ST_UPD_INDEX] = prepareStmt(conn, "UPDATE sbtest SET k = k + 1 WHERE id = ?")
-    bindUIntParam(w.bpUpdIndex, w.updIndexId)
-    if mysql_stmt_bind_param(w.st[ST_UPD_INDEX]!, w.bpUpdIndex) {
-        dieStmt(w.st[ST_UPD_INDEX]!, "mysql_stmt_bind_param(upd_index)")
-    }
-
-    /* Non-index update: params (c, id). */
-    w.st[ST_UPD_NONINDEX] = prepareStmt(conn, "UPDATE sbtest SET c = ? WHERE id = ?")
-    w.bpUpdNonindex.pointee = MYSQL_BIND()
-    w.bpUpdNonindex.pointee.buffer_type = MYSQL_TYPE_STRING
-    w.bpUpdNonindex.pointee.buffer = UnsafeMutableRawPointer(cValBuf)
-    w.bpUpdNonindex.pointee.buffer_length = cValLen.pointee
-    w.bpUpdNonindex.pointee.length = cValLen
-    bindUIntParam(w.bpUpdNonindex + 1, w.updNonindexId)
-    if mysql_stmt_bind_param(w.st[ST_UPD_NONINDEX]!, w.bpUpdNonindex) {
-        dieStmt(w.st[ST_UPD_NONINDEX]!, "mysql_stmt_bind_param(upd_nonindex)")
-    }
-
-    /* Delete. */
-    w.st[ST_DELETE] = prepareStmt(conn, "DELETE FROM sbtest WHERE id = ?")
-    bindUIntParam(w.bpDel, w.delId)
-    if mysql_stmt_bind_param(w.st[ST_DELETE]!, w.bpDel) {
-        dieStmt(w.st[ST_DELETE]!, "mysql_stmt_bind_param(delete)")
-    }
-
-    /* Insert: params (id, k, c, pad). */
-    w.st[ST_INSERT] = prepareStmt(
-        conn, "INSERT INTO sbtest (id, k, c, pad) VALUES (?, ?, ?, ?)")
-    bindUIntParam(w.bpIns, w.insId)
-    bindUIntParam(w.bpIns + 1, w.insK)
-    (w.bpIns + 2).pointee = MYSQL_BIND()
-    (w.bpIns + 2).pointee.buffer_type = MYSQL_TYPE_STRING
-    (w.bpIns + 2).pointee.buffer = UnsafeMutableRawPointer(cValBuf)
-    (w.bpIns + 2).pointee.buffer_length = cValLen.pointee
-    (w.bpIns + 2).pointee.length = cValLen
-    (w.bpIns + 3).pointee = MYSQL_BIND()
-    (w.bpIns + 3).pointee.buffer_type = MYSQL_TYPE_STRING
-    (w.bpIns + 3).pointee.buffer = UnsafeMutableRawPointer(padValBuf)
-    (w.bpIns + 3).pointee.buffer_length = padValLen.pointee
-    (w.bpIns + 3).pointee.length = padValLen
-    if mysql_stmt_bind_param(w.st[ST_INSERT]!, w.bpIns) {
-        dieStmt(w.st[ST_INSERT]!, "mysql_stmt_bind_param(insert)")
-    }
+    _ = mysql_stmt_close(stmt)
+    binds.deinitialize(count: intBatch); binds.deallocate()
+    vals.deallocate()
 }
 
-/* ---------------- transaction execution ------------------------------------ */
+/* ---------------- workload 2: integer fetch + sum -------------------------- */
 
-/* Returns true on a retryable concurrency error, false on success; dies otherwise. */
-func execDml(_ st: MySQLStmt, _ what: String) -> Bool {
-    if mysql_stmt_execute(st) != 0 {
-        let e = mysql_stmt_errno(st)
-        if errRetryable(e) { return true }
-        dieStmt(st, what)
-    }
-    return false
-}
+func runWorkload2(_ w: Worker) {
+    let stmt = prepareStmt(w.conn, "SELECT val FROM bench_int LIMIT \(intRows)")
 
-/* Execute a SELECT and fetch all rows to MYSQL_NO_DATA.
-   Returns true on a retryable concurrency error, false on success; dies otherwise. */
-func execSelect(_ st: MySQLStmt, _ what: String) -> Bool {
-    if mysql_stmt_execute(st) != 0 {
-        let e = mysql_stmt_errno(st)
-        if errRetryable(e) { return true }
-        dieStmt(st, what)
+    let valBuf = UnsafeMutablePointer<Int32>.allocate(capacity: 1)
+    valBuf.initialize(to: 0)
+    let binds = allocBind(1)
+    binds[0].buffer_type = MYSQL_TYPE_LONG
+    binds[0].buffer = UnsafeMutableRawPointer(valBuf)
+    binds[0].is_unsigned = false
+    if mysql_stmt_bind_result(stmt, binds) {
+        dieStmt(stmt, "mysql_stmt_bind_result(int-read)")
     }
+
+    _ = pthread_barrier_wait(startBarrier)
+
+    /* One latency sample per worker for the whole scan. */
+    let t0 = nowNs()
+    if mysql_stmt_execute(stmt) != 0 {
+        dieStmt(stmt, "int-read execute")
+    }
+    var sum: Int64 = 0
+    var rows: Int64 = 0
     while true {
-        let rc = mysql_stmt_fetch(st)
+        let rc = mysql_stmt_fetch(stmt)
         if rc == 0 || rc == MYSQL_DATA_TRUNCATED {
-            continue /* row consumed */
+            sum = sum &+ Int64(valBuf.pointee)
+            rows += 1
+            progressSlots[w.index] = rows
+            continue
         }
+        if rc == MYSQL_NO_DATA { break }
+        dieStmt(stmt, "int-read fetch")
+    }
+    w.record((nowNs() - t0) / 1000)
+    w.opsDone = rows
+    w.sink = UInt64(bitPattern: sum)
+
+    _ = mysql_stmt_close(stmt)
+    binds.deinitialize(count: 1); binds.deallocate()
+    valBuf.deallocate()
+}
+
+/* ---------------- workload 3: blob insert + MD5 ---------------------------- */
+
+func runWorkload3(_ w: Worker) {
+    let stmt = prepareStmt(w.conn,
+                           "INSERT INTO bench_blob (id, data) VALUES (?, ?)")
+
+    let idBuf = UnsafeMutablePointer<Int64>.allocate(capacity: 1)
+    idBuf.initialize(to: 0)
+    /* 8-byte aligned so the bulk UInt64 fill and the id overwrite are aligned. */
+    let blobRaw = UnsafeMutableRawPointer.allocate(byteCount: blobSize, alignment: 8)
+    let blobBuf = blobRaw.bindMemory(to: UInt8.self, capacity: blobSize)
+    let blobLen = UnsafeMutablePointer<UInt>.allocate(capacity: 1)
+    blobLen.initialize(to: UInt(blobSize))
+    let md = UnsafeMutablePointer<UInt8>.allocate(capacity: 16)
+    md.initialize(repeating: 0, count: 16)
+
+    let binds = allocBind(2)
+    binds[0].buffer_type = MYSQL_TYPE_LONGLONG
+    binds[0].buffer = UnsafeMutableRawPointer(idBuf)
+    binds[0].is_unsigned = false
+    binds[1].buffer_type = MYSQL_TYPE_LONG_BLOB
+    binds[1].buffer = blobRaw
+    binds[1].buffer_length = UInt(blobSize)
+    binds[1].length = blobLen
+    if mysql_stmt_bind_param(stmt, binds) {
+        dieStmt(stmt, "mysql_stmt_bind_param(blob-insert)")
+    }
+
+    /* Produce the buffer ONCE per worker with a fast bulk fill (SPEC: not a
+       per-byte loop). Before each blob the first 8 bytes are overwritten with
+       the blob id, so every blob's content — and its MD5 — differs. */
+    fillBlobBuffer(blobRaw, blobSize,
+                   seed: UInt64(bitPattern: Int64(baseSeed + w.index)))
+
+    _ = pthread_barrier_wait(startBarrier)
+
+    var sink: UInt64 = 0
+    for k in 0..<blobCount {
+        let idv = Int64(w.index * blobCount + k)
+        /* Overwrite first 8 bytes with the id → unique content per blob. */
+        blobRaw.storeBytes(of: idv, toByteOffset: 0, as: Int64.self)
+        /* MD5 of the whole BENCH_BLOB_SIZE buffer; hex digest into the sink. */
+        _ = MD5(blobBuf, blobSize, md)
+        foldHexDigest(md, &sink)
+
+        idBuf.pointee = idv
+        let t0 = nowNs()
+        if mysql_stmt_execute(stmt) != 0 {
+            dieStmt(stmt, "blob-insert execute")
+        }
+        w.record((nowNs() - t0) / 1000)
+        w.opsDone += 1
+        progressSlots[w.index] = w.opsDone
+    }
+    w.sink = sink
+
+    _ = mysql_stmt_close(stmt)
+    binds.deinitialize(count: 2); binds.deallocate()
+    idBuf.deallocate(); blobRaw.deallocate(); blobLen.deallocate(); md.deallocate()
+}
+
+/* ---------------- workload 4: blob read + MD5 ------------------------------ */
+
+func runWorkload4(_ w: Worker) {
+    let stmt = prepareStmt(w.conn, "SELECT data FROM bench_blob WHERE id = ?")
+
+    let idBuf = UnsafeMutablePointer<Int64>.allocate(capacity: 1)
+    idBuf.initialize(to: 0)
+    let blobBuf = UnsafeMutablePointer<UInt8>.allocate(capacity: blobSize)
+    blobBuf.initialize(repeating: 0, count: blobSize)
+    let outLen = UnsafeMutablePointer<UInt>.allocate(capacity: 1)
+    outLen.initialize(to: 0)
+    let md = UnsafeMutablePointer<UInt8>.allocate(capacity: 16)
+    md.initialize(repeating: 0, count: 16)
+
+    let pbind = allocBind(1)
+    pbind[0].buffer_type = MYSQL_TYPE_LONGLONG
+    pbind[0].buffer = UnsafeMutableRawPointer(idBuf)
+    pbind[0].is_unsigned = false
+    if mysql_stmt_bind_param(stmt, pbind) {
+        dieStmt(stmt, "mysql_stmt_bind_param(blob-read)")
+    }
+    let rbind = allocBind(1)
+    rbind[0].buffer_type = MYSQL_TYPE_LONG_BLOB
+    rbind[0].buffer = UnsafeMutableRawPointer(blobBuf)
+    rbind[0].buffer_length = UInt(blobSize)
+    rbind[0].length = outLen
+    if mysql_stmt_bind_result(stmt, rbind) {
+        dieStmt(stmt, "mysql_stmt_bind_result(blob-read)")
+    }
+
+    _ = pthread_barrier_wait(startBarrier)
+
+    var sink: UInt64 = 0
+    for k in 0..<blobCount {
+        idBuf.pointee = Int64(w.index * blobCount + k)
+        let t0 = nowNs()
+        if mysql_stmt_execute(stmt) != 0 {
+            dieStmt(stmt, "blob-read execute")
+        }
+        let rc = mysql_stmt_fetch(stmt)
         if rc == MYSQL_NO_DATA {
-            return false
+            fail("blob-read: id \(idBuf.pointee) not found")
         }
-        /* rc == 1: error */
-        let e = mysql_stmt_errno(st)
-        if errRetryable(e) { return true }
-        dieStmt(st, what)
-    }
-}
-
-let rangeWhat = [
-    "simple range SELECT", "sum range SELECT",
-    "order range SELECT", "distinct range SELECT",
-]
-
-/* One attempt at the transaction body (the 18 inner statements).
-   Values are drawn immediately before each statement executes, so a retry
-   naturally redraws everything (the PRNG stream continues).
-   Returns true if the attempt must be retried, false on success; dies otherwise. */
-func txnBody(_ w: Worker) -> Bool {
-    /* 10 point selects */
-    for j in 0..<10 {
-        w.pointId[j] = UInt32(1 + prngRand(w, tableRows))
-        if execSelect(w.st[ST_POINT0 + j]!, "point SELECT") { return true }
-    }
-
-    /* 4 range selects: simple, sum, order, distinct */
-    for j in 0..<4 {
-        let lo = 1 + prngRand(w, tableRows)
-        w.rangeLo[j] = UInt32(lo)
-        w.rangeHi[j] = UInt32(lo + rangeSize - 1)
-        if execSelect(w.st[ST_RANGE_SIMPLE + j]!, rangeWhat[j]) { return true }
-    }
-
-    /* index update */
-    w.updIndexId.pointee = UInt32(1 + prngRand(w, tableRows))
-    if execDml(w.st[ST_UPD_INDEX]!, "index UPDATE") { return true }
-
-    /* non-index update */
-    w.updNonindexId.pointee = UInt32(1 + prngRand(w, tableRows))
-    if execDml(w.st[ST_UPD_NONINDEX]!, "non-index UPDATE") { return true }
-
-    /* delete + insert (same id; k drawn with it, before the DELETE) */
-    let id = 1 + prngRand(w, tableRows)
-    let k = prngRand(w, tableRows)
-    w.delId.pointee = UInt32(id)
-    if execDml(w.st[ST_DELETE]!, "DELETE") { return true }
-    w.insId.pointee = UInt32(id)
-    w.insK.pointee = UInt32(k)
-    if execDml(w.st[ST_INSERT]!, "INSERT") { return true }
-
-    return false
-}
-
-/* Run one full transaction until it commits. Retryable errors (1213/1205/1062)
-   anywhere in it — including BEGIN/COMMIT — roll back, bump retries, redraw
-   and rerun. */
-func runTxn(_ w: Worker) {
-    while true {
-        if mysql_query(w.conn, "BEGIN") != 0 {
-            let e = mysql_errno(w.conn)
-            if !errRetryable(e) { dieMysql(w.conn, "BEGIN") }
-            _ = mysql_query(w.conn, "ROLLBACK") /* ignore result */
-            w.retries += 1
-            continue
+        if rc != 0 && rc != MYSQL_DATA_TRUNCATED {
+            dieStmt(stmt, "blob-read fetch")
         }
-        if txnBody(w) {
-            _ = mysql_query(w.conn, "ROLLBACK") /* ignore result */
-            w.retries += 1
-            continue
+        w.record((nowNs() - t0) / 1000)
+
+        /* MD5 of the blob content in app code; hex digest consumed into sink. */
+        _ = MD5(blobBuf, Int(outLen.pointee), md)
+        foldHexDigest(md, &sink)
+
+        /* A PK lookup returns exactly one row; drain the result set so the next
+           execute does not hit "commands out of sync". */
+        while true {
+            let r = mysql_stmt_fetch(stmt)
+            if r == MYSQL_NO_DATA { break }
+            if r != 0 && r != MYSQL_DATA_TRUNCATED {
+                dieStmt(stmt, "blob-read drain")
+            }
         }
-        if mysql_query(w.conn, "COMMIT") != 0 {
-            let e = mysql_errno(w.conn)
-            if !errRetryable(e) { dieMysql(w.conn, "COMMIT") }
-            _ = mysql_query(w.conn, "ROLLBACK") /* ignore result */
-            w.retries += 1
-            continue
-        }
-        return
+
+        w.opsDone += 1
+        progressSlots[w.index] = w.opsDone
     }
+    w.sink = sink
+
+    _ = mysql_stmt_close(stmt)
+    pbind.deinitialize(count: 1); pbind.deallocate()
+    rbind.deinitialize(count: 1); rbind.deallocate()
+    idBuf.deallocate(); blobBuf.deallocate(); outLen.deallocate(); md.deallocate()
 }
 
 /* ---------------- worker thread -------------------------------------------- */
 
 func workerMain(_ w: Worker) {
     workerConnect(w)
-    workerPrepare(w)
 
-    /* Warmup: executed, same PRNG stream, not timed. */
-    for _ in 0..<warmupTxns {
-        runTxn(w)
-    }
-    /* Reported retries cover only the timed window (all impls agree). */
-    w.retries = 0
-
-    /* Wait for all workers (and main) at the start barrier. */
-    _ = pthread_barrier_wait(startBarrier)
-
-    /* Timed loop: per-transaction latency in integer microseconds, from just
-       before the first BEGIN attempt to after the successful COMMIT. */
-    if durationS > 0 {
-        /* Duration mode: deadline checked before each new transaction; a
-           transaction in flight at the deadline (its retries included)
-           completes. BENCH_TXNS_PER_THREAD is ignored. */
-        let deadlineNs = nowNs() + Int64(durationS) * 1_000_000_000
-        while nowNs() < deadlineNs {
-            let t0 = nowNs()
-            runTxn(w)
-            w.record((nowNs() - t0) / 1000)
-        }
-    } else {
-        for _ in 0..<txnsPerThread {
-            let t0 = nowNs()
-            runTxn(w)
-            w.record((nowNs() - t0) / 1000)
-        }
+    switch workload {
+    case 1: runWorkload1(w)
+    case 2: runWorkload2(w)
+    case 3: runWorkload3(w)
+    case 4: runWorkload4(w)
+    default: fail("invalid BENCH_WORKLOAD \(workload) (expected 1..4)")
     }
 
-    for j in 0..<ST_COUNT {
-        _ = mysql_stmt_close(w.st[j]!)
-    }
     mysql_close(w.conn)
     mysql_thread_end()
     doneSem.signal()
+}
+
+/* ---------------- progress monitor ----------------------------------------- */
+
+var progressPath: String? = nil
+var progressTmpPath: String = ""
+var progressSec = 5
+
+func writeProgress() {
+    guard let path = progressPath else { return }
+    var ops: Int64 = 0
+    for i in 0..<nThreads { ops += progressSlots[i] }
+    let elapsed = Double(nowNs() - tStartNs) / 1e9
+    let thr = elapsed > 0 ? Double(ops) / elapsed : 0.0
+
+    var json = "{\"workload\":\(workload)"
+    json += ",\"workload_name\":\"\(workloadName(workload))\""
+    json += ",\"unit\":\"\(workloadUnit(workload))\""
+    json += ",\"threads\":\(nThreads)"
+    json += ",\"ops\":\(ops)"
+    json += ",\"elapsed_s\":\(String(format: "%.3f", elapsed))"
+    json += ",\"throughput\":\(String(format: "%.1f", thr))"
+    json += ",\"partial\":true}\n"
+
+    /* Atomic overwrite: write FILE.tmp, then rename over FILE. */
+    guard let fp = fopen(progressTmpPath, "w") else { return }
+    _ = json.withCString { fputs($0, fp) }
+    fclose(fp)
+    _ = progressTmpPath.withCString { tmpC in
+        path.withCString { dstC in rename(tmpC, dstC) }
+    }
+}
+
+func monitorMain() {
+    /* Poll the stop flag in short steps so shutdown is prompt, writing roughly
+       every progressSec seconds. */
+    let stepUs: useconds_t = 100_000 /* 100 ms */
+    let stepsPerInterval = max(1, progressSec * 10)
+    while progressStop.pointee == 0 {
+        var steps = 0
+        while steps < stepsPerInterval && progressStop.pointee == 0 {
+            usleep(stepUs)
+            steps += 1
+        }
+        if progressStop.pointee != 0 { break }
+        writeProgress()
+    }
+    monitorDone.signal()
 }
 
 /* ---------------- main ----------------------------------------------------- */
@@ -627,18 +627,33 @@ func main() {
     cfgDb = envStr("MYSQL_DB")
 
     /* Workload config */
-    tableRows = envInt("BENCH_TABLE_ROWS")
+    workload = envInt("BENCH_WORKLOAD")
     nThreads = envInt("BENCH_THREADS")
-    warmupTxns = envInt("BENCH_WARMUP_TXNS")
-    txnsPerThread = envInt("BENCH_TXNS_PER_THREAD")
-    rangeSize = envInt("BENCH_RANGE_SIZE")
     baseSeed = envInt("BENCH_SEED")
-    durationS = envIntDefault("BENCH_DURATION_S", 0) /* 0 → events, > 0 → duration */
+    intRows = envIntDefault("BENCH_INT_ROWS", 1_000_000)
+    intBatch = envIntDefault("BENCH_INT_BATCH", 10)
+    blobCount = envIntDefault("BENCH_BLOB_COUNT", 100)
+    blobSize = envIntDefault("BENCH_BLOB_SIZE", 1_048_576)
 
-    if nThreads <= 0 || txnsPerThread <= 0 || tableRows <= 0 ||
-        rangeSize <= 0 || warmupTxns < 0 || durationS < 0 {
-        fail("invalid workload configuration")
+    if workload < 1 || workload > 4 { fail("BENCH_WORKLOAD must be 1..4") }
+    if nThreads <= 0 { fail("BENCH_THREADS must be > 0") }
+    if (workload == 1 || workload == 2) && intRows <= 0 {
+        fail("BENCH_INT_ROWS must be > 0")
     }
+    if workload == 1 && (intBatch <= 0 || intRows % intBatch != 0) {
+        fail("BENCH_INT_BATCH must be > 0 and divide BENCH_INT_ROWS")
+    }
+    if (workload == 3 || workload == 4) && (blobCount <= 0 || blobSize <= 0) {
+        fail("BENCH_BLOB_COUNT and BENCH_BLOB_SIZE must be > 0")
+    }
+    if workload == 3 && blobSize < 8 {
+        fail("BENCH_BLOB_SIZE must be >= 8 (the blob id occupies the first 8 bytes)")
+    }
+
+    /* Progress config */
+    progressPath = envStrOptional("BENCH_PROGRESS_FILE")
+    progressSec = max(1, envIntDefault("BENCH_PROGRESS_SEC", 5))
+    if let p = progressPath { progressTmpPath = p + ".tmp" }
 
     /* Must be called before any threads touch the client library.
        (mysql_library_init is a macro aliasing mysql_server_init.) */
@@ -646,22 +661,22 @@ func main() {
         fail("mysql_library_init failed")
     }
 
-    /* Shared constant string parameters (C_VAL 120 chars, PAD_VAL 60 chars). */
-    let cVal = String(repeating: "abcdefghij", count: 12)
-    let padVal = String(repeating: "0123456789", count: 6)
-    cValBuf = makeCBuf(cVal)
-    cValLen = UnsafeMutablePointer<UInt>.allocate(capacity: 1)
-    cValLen.initialize(to: UInt(cVal.utf8.count))   /* 120 */
-    padValBuf = makeCBuf(padVal)
-    padValLen = UnsafeMutablePointer<UInt>.allocate(capacity: 1)
-    padValLen.initialize(to: UInt(padVal.utf8.count)) /* 60 */
-
-    /* Events mode pre-allocates exactly txnsPerThread latency slots per worker;
-       duration mode starts at 4096 and grows as needed. */
-    let workers = (0..<nThreads).map {
-        Worker(index: $0, seed: baseSeed + $0,
-               latCapacity: durationS > 0 ? 4096 : txnsPerThread)
+    /* Latency samples per worker: WL1 = iterations, WL2 = 1, WL3/4 = blobCount. */
+    let latCap: Int
+    switch workload {
+    case 1: latCap = intRows / intBatch
+    case 2: latCap = 1
+    default: latCap = blobCount
     }
+
+    let workers = (0..<nThreads).map {
+        Worker(index: $0, seed: baseSeed + $0, latCapacity: latCap)
+    }
+
+    progressSlots = UnsafeMutablePointer<Int64>.allocate(capacity: nThreads)
+    progressSlots.initialize(repeating: 0, count: nThreads)
+    progressStop = UnsafeMutablePointer<Int32>.allocate(capacity: 1)
+    progressStop.initialize(to: 0)
 
     startBarrier = UnsafeMutablePointer<pthread_barrier_t>.allocate(capacity: 1)
     startBarrier.initialize(to: pthread_barrier_t())
@@ -674,46 +689,75 @@ func main() {
         t.start()
     }
 
-    /* Workers connect, prepare and warm up, then block on the barrier.
-       When the last one arrives, everybody is released: sample t_start. */
+    /* Workers connect and prepare, then block on the barrier. When the last one
+       arrives, everybody is released: sample t_start. */
     _ = pthread_barrier_wait(startBarrier)
-    let tStart = nowNs()
+    tStartNs = nowNs()
+
+    /* Launch the progress monitor only after t_start is known. */
+    if progressPath != nil {
+        let m = Thread { monitorMain() }
+        m.start()
+    }
 
     for _ in 0..<nThreads {
         doneSem.wait()
     }
     let tEnd = nowNs()
 
+    /* Stop the monitor and wait for it to exit (no final write). */
+    if progressPath != nil {
+        progressStop.pointee = 1
+        monitorDone.wait()
+    }
+
     _ = pthread_barrier_destroy(startBarrier)
 
     let driverVersion = String(cString: mysql_get_client_info())
 
-    /* Merge latency arrays, sort, percentiles. txns: events mode =
-       nThreads * txnsPerThread; duration mode = actual committed timed
-       transactions across workers. */
-    var txns = 0
-    for w in workers {
-        txns += w.latCount
-    }
-    var lat = [Int64](repeating: 0, count: txns)
-    var retries: Int64 = 0
+    /* Merge latency samples, sort, percentiles. */
+    var n = 0
+    for w in workers { n += w.latCount }
+    var lat = [Int64](repeating: 0, count: n)
     var idx = 0
     for w in workers {
         for i in 0..<w.latCount {
             lat[idx] = w.lat[i]
             idx += 1
         }
-        retries += w.retries
+        globalSink = globalSink &+ w.sink
     }
     lat.sort()
     let p50 = percentile(lat, 50)
     let p95 = percentile(lat, 95)
     let p99 = percentile(lat, 99)
-    let maxUs = lat[txns - 1]
+    let maxUs = n > 0 ? lat[n - 1] : 0
 
-    let elapsedS = Double(tEnd - tStart) / 1e9
-    let tps = Double(txns) / elapsedS
-    let qps = tps * 20.0 /* 18 statements + BEGIN + COMMIT */
+    let elapsedS = Double(tEnd - tStartNs) / 1e9
+
+    /* ops per SPEC: WL1 = threads*INT_ROWS, WL3 = threads*BLOB_COUNT;
+       WL2/WL4 = actual rows/blobs read (summed). */
+    let ops: Int64
+    switch workload {
+    case 1: ops = Int64(nThreads) * Int64(intRows)
+    case 3: ops = Int64(nThreads) * Int64(blobCount)
+    default:
+        var s: Int64 = 0
+        for w in workers { s += w.opsDone }
+        ops = s
+    }
+
+    let throughput = elapsedS > 0 ? Double(ops) / elapsedS : 0.0
+
+    /* mb_per_s only for the blob workloads; int workloads report 0. */
+    let mbStr: String
+    if workload == 3 || workload == 4 {
+        let mb = elapsedS > 0
+            ? Double(ops) * Double(blobSize) / 1e6 / elapsedS : 0.0
+        mbStr = String(format: "%.1f", mb)
+    } else {
+        mbStr = "0"
+    }
 
     var hostBuf = [CChar](repeating: 0, count: 256)
     var clientHost = "unknown"
@@ -721,32 +765,45 @@ func main() {
         clientHost = hostBuf.withUnsafeBufferPointer { String(cString: $0.baseAddress!) }
     }
 
-    /* One JSON line, exact v2 field order. */
-    var json = "{\"lang\":\"swift\",\"driver\":\"libmysqlclient\""
+    /* One JSON line, SPEC field order. client_cpu_s / server_cpu_s are filled
+       by the harness, so emit 0. */
+    var json = "{\"lang\":\"swift\""
+    json += ",\"workload\":\(workload)"
+    json += ",\"workload_name\":\"\(workloadName(workload))\""
+    json += ",\"unit\":\"\(workloadUnit(workload))\""
+    json += ",\"driver\":\"libmysqlclient\""
     json += ",\"driver_version\":\"\(driverVersion)\""
     json += ",\"runtime_version\":\"\(runtimeVersion)\""
     json += ",\"prepared\":true"
     json += ",\"client_host\":\"\(clientHost)\""
     json += ",\"db_host\":\"\(cfgHost)\""
     json += ",\"threads\":\(nThreads)"
-    json += ",\"txns\":\(txns)"
-    json += ",\"retries\":\(retries)"
+    json += ",\"ops\":\(ops)"
     json += ",\"errors\":0"
     json += ",\"elapsed_s\":\(String(format: "%.3f", elapsedS))"
-    json += ",\"tps\":\(String(format: "%.1f", tps))"
-    json += ",\"qps\":\(String(format: "%.1f", qps))"
+    json += ",\"throughput\":\(String(format: "%.1f", throughput))"
+    json += ",\"mb_per_s\":\(mbStr)"
     json += ",\"p50_us\":\(p50)"
     json += ",\"p95_us\":\(p95)"
     json += ",\"p99_us\":\(p99)"
-    json += ",\"max_us\":\(maxUs)}"
+    json += ",\"max_us\":\(maxUs)"
+    json += ",\"client_cpu_s\":0,\"server_cpu_s\":0}"
     print(json)
 
-    for w in workers {
-        w.cleanup()
+    /* Supersede the partial progress file now that stdout has the final result. */
+    if let p = progressPath {
+        _ = p.withCString { unlink($0) }
     }
+
+    /* Reference the sink so the MD5/sum work cannot be optimized away. */
+    if globalSink == 0xFFFF_FFFF_FFFF_FFFF {
+        FileHandle.standardError.write(Data("\(globalSink)".utf8))
+    }
+
+    for w in workers { w.cleanup() }
     startBarrier.deallocate()
-    cValBuf.deallocate(); cValLen.deallocate()
-    padValBuf.deallocate(); padValLen.deallocate()
+    progressSlots.deallocate()
+    progressStop.deallocate()
     mysql_server_end()
 }
 

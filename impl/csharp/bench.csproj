@@ -8,12 +8,13 @@
     <Nullable>enable</Nullable>
     <ImplicitUsings>disable</ImplicitUsings>
     <InvariantGlobalization>true</InvariantGlobalization>
-    <!-- Server GC: per-core heaps + parallel collection instead of the default
-         single-threaded workstation GC, which stop-the-world-pauses every
-         worker thread and collapses throughput past ~64 workers. Measured
-         ~2.4x at 256 workers. -->
-    <ServerGarbageCollection>true</ServerGarbageCollection>
-    <ConcurrentGarbageCollection>true</ConcurrentGarbageCollection>
+    <!-- GC mode is intentionally NOT pinned here so it can be chosen at runtime
+         via the DOTNET_gcServer env var: run.sh exports DOTNET_gcServer=1 for the
+         tuned (server GC) variant and DOTNET_gcServer=0 for the stock (workstation
+         GC) variant, driven by BENCH_TUNED. Server GC gives per-core heaps +
+         parallel collection instead of the single-threaded workstation GC that
+         stop-the-world-pauses every worker and collapses throughput past ~64
+         workers. Concurrent GC stays enabled (its runtime knob is DOTNET_gcConcurrent). -->
   </PropertyGroup>
 
   <ItemGroup>

@@ -1,23 +1,39 @@
-// mysql-lang-bench: C++ implementation (libmysqlclient C API, server-side
-// prepared statements, std::thread workers). Follows SPEC.md (v2,
-// multithreaded oltp_read_write) exactly.
+// mysql-lang-bench — C++ implementation (v3, four micro-workloads).
 //
-// Build: c++ -std=c++17 -O2 -pthread bench.cpp -o bench
-//        $(mysql_config --cflags --libs)
+// libmysqlclient C API with server-side prepared statements, std::thread
+// workers (one dedicated MYSQL* connection each). One workload per run,
+// selected by BENCH_WORKLOAD (1..4); one JSON line on stdout. See SPEC.md.
+//
+//   WL1 int-insert : multi-row prepared INSERT into bench_int (batched)
+//   WL2 int-read   : SELECT val ... LIMIT N, sum in app code -> black box
+//   WL3 blob-insert: generate BENCH_BLOB_SIZE random bytes, MD5 in app,
+//                    INSERT (id, data) into bench_blob
+//   WL4 blob-read  : SELECT data WHERE id = ?, MD5 in app code
+//
+// Build: c++ -std=c++17 -O2 -pthread bench.cpp -o bench \
+//        $(mysql_config --cflags --libs) -lcrypto
 
 #include <mysql.h>
+
+// OpenSSL >= 3.0 deprecates the low-level MD5 API; SPEC pins <openssl/md5.h>,
+// so suppress the deprecation diagnostics rather than switch to EVP.
+#define OPENSSL_SUPPRESS_DEPRECATED
+#include <openssl/md5.h>
 
 #include <pthread.h> // pthread_barrier_t (C++17 has no std::barrier)
 #include <unistd.h>  // gethostname
 
 #include <algorithm>
+#include <atomic>
 #include <cerrno>
 #include <chrono>
 #include <cinttypes>
+#include <condition_variable>
 #include <cstdint>
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
+#include <mutex>
 #include <string>
 #include <thread>
 #include <type_traits>
@@ -27,8 +43,11 @@
 // on MySQL >= 8.0.1; derive the element type portably from the header.
 using bind_bool = std::remove_pointer_t<decltype(MYSQL_BIND::is_null)>;
 
+// ---- error helpers ----------------------------------------------------------
 // die* may be called from worker threads: std::exit terminates the whole
-// process, which is exactly what SPEC.md wants for non-retryable errors.
+// process, which is what SPEC.md wants for non-retryable errors (errors == 0,
+// non-zero exit, no retries).
+
 [[noreturn]] static void die(const std::string &msg) {
     std::fprintf(stderr, "error: %s\n", msg.c_str());
     std::exit(1);
@@ -46,6 +65,8 @@ using bind_bool = std::remove_pointer_t<decltype(MYSQL_BIND::is_null)>;
     std::exit(1);
 }
 
+// ---- env parsing ------------------------------------------------------------
+
 static const char *env_str(const char *name) {
     const char *v = std::getenv(name);
     if (!v || !*v)
@@ -62,9 +83,7 @@ static int64_t parse_int(const char *name, const char *v) {
     return static_cast<int64_t>(n);
 }
 
-static int64_t env_int(const char *name) {
-    return parse_int(name, env_str(name));
-}
+static int64_t env_int(const char *name) { return parse_int(name, env_str(name)); }
 
 static int64_t env_int_or(const char *name, int64_t def) {
     const char *v = std::getenv(name);
@@ -73,7 +92,12 @@ static int64_t env_int_or(const char *name, int64_t def) {
     return parse_int(name, v);
 }
 
-// ---- configuration (written once in main, before any thread starts) --------
+static std::string env_str_or(const char *name, const char *def) {
+    const char *v = std::getenv(name);
+    return (v && *v) ? std::string(v) : std::string(def);
+}
+
+// ---- configuration (written once in main, before any thread starts) ---------
 
 struct Config {
     const char *host = nullptr;
@@ -81,98 +105,68 @@ struct Config {
     const char *password = nullptr;
     const char *db = nullptr;
     unsigned int port = 0;
-    int64_t table_rows = 0;
+
+    int64_t workload = 0;
     int64_t threads = 0;
-    int64_t warmup_txns = 0;
-    int64_t txns_per_thread = 0;
-    int64_t duration_s = 0; // 0 = events mode, > 0 = fixed-duration mode
-    int64_t range_size = 0;
     int64_t seed = 0;
+    int64_t int_rows = 0;
+    int64_t int_batch = 0;
+    int64_t blob_count = 0;
+    int64_t blob_size = 0;
+
+    std::string progress_file;
+    int64_t progress_sec = 5;
 };
 
 static Config g_cfg;
-static std::string C_VAL;   // "abcdefghij" x 12 (120 chars)
-static std::string PAD_VAL; // "0123456789" x 6  (60 chars)
 static pthread_barrier_t g_start_barrier;
 
-// ---- the 18 per-worker prepared statements ---------------------------------
-// Slots: 0..9 point selects, 10 simple range, 11 sum range, 12 order range,
-// 13 distinct range, 14 index update, 15 non-index update, 16 delete,
-// 17 insert.
-
-static const char *SQL_POINT = "SELECT c FROM sbtest WHERE id = ?";
-static const char *SQL_RANGE = "SELECT c FROM sbtest WHERE id BETWEEN ? AND ?";
-static const char *SQL_SUM = "SELECT SUM(k) FROM sbtest WHERE id BETWEEN ? AND ?";
-static const char *SQL_ORDER =
-    "SELECT c FROM sbtest WHERE id BETWEEN ? AND ? ORDER BY c";
-static const char *SQL_DISTINCT =
-    "SELECT DISTINCT c FROM sbtest WHERE id BETWEEN ? AND ? ORDER BY c";
-static const char *SQL_UPD_IDX = "UPDATE sbtest SET k = k + 1 WHERE id = ?";
-static const char *SQL_UPD_NONIDX = "UPDATE sbtest SET c = ? WHERE id = ?";
-static const char *SQL_DELETE = "DELETE FROM sbtest WHERE id = ?";
-static const char *SQL_INSERT =
-    "INSERT INTO sbtest (id, k, c, pad) VALUES (?, ?, ?, ?)";
-
-// ---- per-worker state -------------------------------------------------------
-// Workers share no mutable state; results are read by main only after join.
-
-struct Worker {
-    int index = 0;
-    MYSQL *conn = nullptr;
-    MYSQL_STMT *st[18] = {};
-
-    uint64_t lcg = 0;      // 31-bit LCG state, seeded with BENCH_SEED + index
-    uint64_t retries = 0;  // timed-window retries (reset after warmup)
-    std::vector<uint64_t> lat; // reserved in main, filled with push_back
-
-    // Bound parameter values (stable addresses for MYSQL_BIND buffers).
-    long long point_id[10] = {};
-    long long range_lo[4] = {};
-    long long range_hi[4] = {};
-    long long upd_idx_id = 0;
-    long long upd_nonidx_id = 0;
-    long long del_ins_id = 0; // same id for DELETE and the following INSERT
-    long long ins_k = 0;
-    unsigned long cval_len = 0;
-    unsigned long pad_len = 0;
-
-    // Bound result buffers. Statements execute one at a time within a worker,
-    // so the `c` buffer is safely shared by every select that returns it.
-    char c_buf[256];
-    unsigned long c_len = 0;
-    bind_bool c_null = 0;
-    bind_bool c_err = 0;
-    // SUM(k) over INT UNSIGNED yields DECIMAL; fetch it as a string.
-    char sum_buf[64];
-    unsigned long sum_len = 0;
-    bind_bool sum_null = 0;
-    bind_bool sum_err = 0;
-
-    // Bind descriptors, kept alive for the worker's lifetime.
-    MYSQL_BIND pbind[18][4]; // params (max 4: the INSERT)
-    MYSQL_BIND rbind[18][1]; // results (every select returns one column)
-};
+// Black-box sink: keeps app-computed sums / MD5 digests from being optimized
+// away. Relaxed atomic RMW on a file-scope object is an observable side effect
+// the compiler cannot elide.
+static std::atomic<uint64_t> g_sink{0};
+static inline void black_box(uint64_t v) {
+    g_sink.fetch_xor(v, std::memory_order_relaxed);
+}
 
 // ---- PRNG (31-bit LCG, identical in every language) -------------------------
 // state = (state * 1103515245 + 12345) mod 2^31. Worker i seeds BENCH_SEED+i.
-// Validation (seed 42): next() = 1250496027, 1116302264, 1000676753,
-// 1668674806, 908095735; rand(100) = 27, 64, 53, 6, 35.
-
-static inline uint64_t lcg_next(Worker &w) {
-    w.lcg = (w.lcg * 1103515245ULL + 12345ULL) & 0x7FFFFFFFULL;
-    return w.lcg;
-}
-
-static inline int64_t lcg_rand(Worker &w, int64_t n) {
-    return static_cast<int64_t>(lcg_next(w) % static_cast<uint64_t>(n));
-}
+// Validation (seed 42, worker 0): first next() = 1250496027.
 
 static uint64_t seed31(int64_t s) {
     int64_t m = ((s % 2147483648LL) + 2147483648LL) % 2147483648LL;
     return static_cast<uint64_t>(m);
 }
 
-// ---- connect + prepare ------------------------------------------------------
+// ---- per-worker state -------------------------------------------------------
+// Workers share no mutable state except `progress` (written only by its owner,
+// read by the monitor via a relaxed atomic). `lat` is read by main after join.
+
+struct Worker {
+    int index = 0;
+    MYSQL *conn = nullptr;
+    uint64_t lcg = 0;                 // 31-bit LCG state
+    std::vector<uint64_t> lat;        // per-op latency, integer microseconds
+    std::atomic<long> progress{0};    // completed ops (rows WL1/2, blobs WL3/4)
+
+    inline uint64_t next() {
+        lcg = (lcg * 1103515245ULL + 12345ULL) & 0x7FFFFFFFULL;
+        return lcg;
+    }
+};
+
+// ---- clock ------------------------------------------------------------------
+
+using clock_t_ = std::chrono::steady_clock;
+
+static inline uint64_t us_since(clock_t_::time_point t0) {
+    return static_cast<uint64_t>(
+        std::chrono::duration_cast<std::chrono::microseconds>(clock_t_::now() -
+                                                              t0)
+            .count());
+}
+
+// ---- connect ----------------------------------------------------------------
 
 static void worker_connect(Worker &w) {
     w.conn = mysql_init(nullptr);
@@ -192,254 +186,317 @@ static void worker_connect(Worker &w) {
     if (!mysql_real_connect(w.conn, g_cfg.host, g_cfg.user, g_cfg.password,
                             g_cfg.db, g_cfg.port, nullptr, 0))
         die_conn(w.conn, "connect failed");
-    // Autocommit stays at the server default (ON); transactions are explicit
-    // BEGIN/COMMIT plain queries.
+    // Autocommit stays at the server default (ON). WL1 wraps its load in a
+    // single explicit transaction; WL3 lets each INSERT autocommit.
 }
 
-static void set_ll(MYSQL_BIND &b, long long *v) {
-    b.buffer_type = MYSQL_TYPE_LONGLONG;
-    b.buffer = v;
+static MYSQL_STMT *prepare(MYSQL *conn, const char *sql) {
+    MYSQL_STMT *st = mysql_stmt_init(conn);
+    if (!st)
+        die_conn(conn, "mysql_stmt_init failed");
+    if (mysql_stmt_prepare(st, sql, static_cast<unsigned long>(std::strlen(sql))))
+        die_stmt(st, "prepare failed");
+    return st;
 }
 
-static void set_str(MYSQL_BIND &b, const char *s, unsigned long *len) {
-    b.buffer_type = MYSQL_TYPE_STRING;
-    b.buffer = const_cast<char *>(s);
-    b.buffer_length = *len;
-    b.length = len;
+// ---- MD5 (OpenSSL low-level API, consumed into the sink) --------------------
+
+static void md5_to_sink(const unsigned char *data, size_t len) {
+    unsigned char digest[MD5_DIGEST_LENGTH];
+    MD5(data, len, digest);
+    // Build the hex digest (SPEC: "hex digest consumed into a sink") and fold
+    // it into the black box so neither the MD5 nor the hex step is elided.
+    char hex[2 * MD5_DIGEST_LENGTH + 1];
+    static const char *H = "0123456789abcdef";
+    for (int i = 0; i < MD5_DIGEST_LENGTH; i++) {
+        hex[2 * i] = H[digest[i] >> 4];
+        hex[2 * i + 1] = H[digest[i] & 0x0F];
+    }
+    hex[2 * MD5_DIGEST_LENGTH] = '\0';
+    uint64_t fold = 1469598103934665603ULL; // FNV-1a over the hex string
+    for (int i = 0; i < 2 * MD5_DIGEST_LENGTH; i++) {
+        fold ^= static_cast<unsigned char>(hex[i]);
+        fold *= 1099511628211ULL;
+    }
+    black_box(fold);
 }
 
-static void worker_prepare(Worker &w) {
-    std::memset(w.pbind, 0, sizeof(w.pbind));
-    std::memset(w.rbind, 0, sizeof(w.rbind));
-    w.cval_len = static_cast<unsigned long>(C_VAL.size());
-    w.pad_len = static_cast<unsigned long>(PAD_VAL.size());
+// ---- workloads --------------------------------------------------------------
+// Each function prepares its statement(s), waits at the start barrier (so
+// connect + prepare are outside the timed window), then runs the timed loop.
+// Per SPEC, the latency sample for one operation times the database statement
+// it names ("per executed INSERT statement", "whole scan", "per blob insert",
+// "per blob read"); app-side work (byte generation, MD5, the running sum that
+// is inseparable from the fetch loop) is still counted in elapsed_s.
 
-    auto prep = [&](int slot, const char *sql) {
-        w.st[slot] = mysql_stmt_init(w.conn);
-        if (!w.st[slot])
-            die_conn(w.conn, "mysql_stmt_init failed");
-        if (mysql_stmt_prepare(w.st[slot], sql, std::strlen(sql)) != 0)
-            die_stmt(w.st[slot], "prepare failed");
-    };
-    auto bind_params = [&](int slot) {
-        if (mysql_stmt_bind_param(w.st[slot], w.pbind[slot]) != 0)
-            die_stmt(w.st[slot], "bind params failed");
-    };
-    auto bind_result = [&](int slot, char *buf, unsigned long buf_len,
-                           unsigned long *len, bind_bool *is_null,
-                           bind_bool *err) {
-        MYSQL_BIND &r = w.rbind[slot][0];
-        r.buffer_type = MYSQL_TYPE_STRING;
-        r.buffer = buf;
-        r.buffer_length = buf_len;
-        r.length = len;
-        r.is_null = is_null;
-        r.error = err;
-        if (mysql_stmt_bind_result(w.st[slot], w.rbind[slot]) != 0)
-            die_stmt(w.st[slot], "bind result failed");
-    };
-    auto bind_c_result = [&](int slot) {
-        bind_result(slot, w.c_buf, sizeof(w.c_buf), &w.c_len, &w.c_null,
-                    &w.c_err);
-    };
+static void wl1_int_insert(Worker &w) {
+    const int batch = static_cast<int>(g_cfg.int_batch);
+    const long inserts = g_cfg.int_rows / g_cfg.int_batch; // rows/batch per stmt
 
-    for (int j = 0; j < 10; j++) { // slots 0..9: point selects
-        prep(j, SQL_POINT);
-        set_ll(w.pbind[j][0], &w.point_id[j]);
-        bind_params(j);
-        bind_c_result(j);
+    std::string sql = "INSERT INTO bench_int (val) VALUES ";
+    for (int j = 0; j < batch; j++)
+        sql += (j == 0) ? "(?)" : ",(?)";
+    MYSQL_STMT *st = prepare(w.conn, sql.c_str());
+
+    std::vector<int32_t> vals(static_cast<size_t>(batch), 0);
+    std::vector<MYSQL_BIND> p(static_cast<size_t>(batch));
+    std::memset(p.data(), 0, p.size() * sizeof(MYSQL_BIND));
+    for (int j = 0; j < batch; j++) {
+        p[j].buffer_type = MYSQL_TYPE_LONG; // 4-byte signed int
+        p[j].buffer = &vals[static_cast<size_t>(j)];
+        p[j].is_unsigned = 0;
+    }
+    if (mysql_stmt_bind_param(st, p.data()))
+        die_stmt(st, "bind params (int insert) failed");
+
+    w.lat.reserve(static_cast<size_t>(inserts));
+
+    pthread_barrier_wait(&g_start_barrier);
+
+    // Autocommit ON (server default): each multi-row INSERT is its own commit.
+    // SPEC forbids wrapping the load in a single BEGIN/COMMIT transaction.
+    long rows_done = 0;
+    for (long it = 0; it < inserts; it++) {
+        for (int j = 0; j < batch; j++) // fresh next() cast to signed 32-bit
+            vals[static_cast<size_t>(j)] = static_cast<int32_t>(w.next());
+        clock_t_::time_point t0 = clock_t_::now();
+        if (mysql_stmt_execute(st))
+            die_stmt(st, "int insert failed");
+        w.lat.push_back(us_since(t0));
+        rows_done += batch;
+        w.progress.store(rows_done, std::memory_order_relaxed);
     }
 
-    const char *range_sql[4] = {SQL_RANGE, SQL_SUM, SQL_ORDER, SQL_DISTINCT};
-    for (int j = 0; j < 4; j++) { // slots 10..13: range selects
-        int slot = 10 + j;
-        prep(slot, range_sql[j]);
-        set_ll(w.pbind[slot][0], &w.range_lo[j]);
-        set_ll(w.pbind[slot][1], &w.range_hi[j]);
-        bind_params(slot);
-        if (slot == 11)
-            bind_result(slot, w.sum_buf, sizeof(w.sum_buf), &w.sum_len,
-                        &w.sum_null, &w.sum_err);
-        else
-            bind_c_result(slot);
+    mysql_stmt_close(st);
+}
+
+static void wl2_int_read(Worker &w) {
+    std::string sql =
+        "SELECT val FROM bench_int LIMIT " + std::to_string(g_cfg.int_rows);
+    MYSQL_STMT *st = prepare(w.conn, sql.c_str());
+
+    int32_t val = 0;
+    unsigned long len = 0;
+    bind_bool is_null = 0, err = 0;
+    MYSQL_BIND r;
+    std::memset(&r, 0, sizeof(r));
+    r.buffer_type = MYSQL_TYPE_LONG;
+    r.buffer = &val;
+    r.is_unsigned = 0;
+    r.length = &len;
+    r.is_null = &is_null;
+    r.error = &err;
+    if (mysql_stmt_bind_result(st, &r))
+        die_stmt(st, "bind result (int read) failed");
+
+    w.lat.reserve(1);
+
+    pthread_barrier_wait(&g_start_barrier);
+
+    clock_t_::time_point t0 = clock_t_::now();
+    if (mysql_stmt_execute(st))
+        die_stmt(st, "int read execute failed");
+
+    int64_t sum = 0;
+    long rows = 0;
+    int rc;
+    while ((rc = mysql_stmt_fetch(st)) == 0 || rc == MYSQL_DATA_TRUNCATED) {
+        sum += val; // 64-bit accumulator, fed to the black box below
+        rows++;
+        if ((rows & 0x3FFF) == 0) // publish progress roughly every 16384 rows
+            w.progress.store(rows, std::memory_order_relaxed);
     }
+    if (rc != MYSQL_NO_DATA)
+        die_stmt(st, "int read fetch failed");
 
-    prep(14, SQL_UPD_IDX);
-    set_ll(w.pbind[14][0], &w.upd_idx_id);
-    bind_params(14);
+    w.lat.push_back(us_since(t0));
+    black_box(static_cast<uint64_t>(sum));
+    w.progress.store(rows, std::memory_order_relaxed);
 
-    prep(15, SQL_UPD_NONIDX);
-    set_str(w.pbind[15][0], C_VAL.c_str(), &w.cval_len);
-    set_ll(w.pbind[15][1], &w.upd_nonidx_id);
-    bind_params(15);
-
-    prep(16, SQL_DELETE);
-    set_ll(w.pbind[16][0], &w.del_ins_id);
-    bind_params(16);
-
-    prep(17, SQL_INSERT);
-    set_ll(w.pbind[17][0], &w.del_ins_id);
-    set_ll(w.pbind[17][1], &w.ins_k);
-    set_str(w.pbind[17][2], C_VAL.c_str(), &w.cval_len);
-    set_str(w.pbind[17][3], PAD_VAL.c_str(), &w.pad_len);
-    bind_params(17);
+    mysql_stmt_close(st);
 }
 
-// ---- one transaction --------------------------------------------------------
+static void wl3_blob_insert(Worker &w) {
+    const size_t sz = static_cast<size_t>(g_cfg.blob_size);
+    MYSQL_STMT *st =
+        prepare(w.conn, "INSERT INTO bench_blob (id, data) VALUES (?, ?)");
 
-static inline bool retryable(unsigned int e) {
-    return e == 1213 /* deadlock */ || e == 1205 /* lock wait timeout */ ||
-           e == 1062 /* duplicate key */;
-}
+    long long id_val = 0;
+    std::vector<unsigned char> buf(sz);
+    unsigned long data_len = static_cast<unsigned long>(sz);
+    MYSQL_BIND p[2];
+    std::memset(p, 0, sizeof(p));
+    p[0].buffer_type = MYSQL_TYPE_LONGLONG;
+    p[0].buffer = &id_val;
+    p[0].is_unsigned = 0;
+    p[1].buffer_type = MYSQL_TYPE_LONG_BLOB;
+    p[1].buffer = buf.data();
+    p[1].buffer_length = static_cast<unsigned long>(sz);
+    p[1].length = &data_len;
+    if (mysql_stmt_bind_param(st, p))
+        die_stmt(st, "bind params (blob insert) failed");
 
-static void rollback_ignore(Worker &w) {
-    (void)mysql_query(w.conn, "ROLLBACK"); // errors deliberately ignored
-}
-
-// Executes one prepared statement; fetches ALL rows when has_result.
-// Returns true on success, false on a retryable concurrency error
-// (1213/1205/1062). Any other error aborts the process.
-static bool exec_stmt(Worker &w, int slot, bool has_result, const char *what) {
-    MYSQL_STMT *s = w.st[slot];
-    if (mysql_stmt_execute(s) != 0) {
-        if (retryable(mysql_stmt_errno(s)))
-            return false;
-        die_stmt(s, what);
-    }
-    if (has_result) {
-        int rc;
-        while ((rc = mysql_stmt_fetch(s)) == 0 || rc == MYSQL_DATA_TRUNCATED) {
-            // row fetched (full result row read into the bound buffers)
+    // Fill the buffer ONCE per worker with a fast bulk LCG fill (8 bytes per
+    // next() step, mixed so the bits spread across the whole word), NOT a
+    // per-byte loop. Before each blob we overwrite the first 8 bytes with the
+    // blob id so every blob's content (and its MD5) differs.
+    {
+        const size_t n8 = sz / 8;
+        unsigned char *p8 = buf.data();
+        for (size_t c = 0; c < n8; c++) {
+            uint64_t r = w.next() * 0x9E3779B97F4A7C15ULL; // spread 31 bits
+            std::memcpy(p8 + c * 8, &r, 8);
         }
-        if (rc != MYSQL_NO_DATA) {
-            unsigned int e = mysql_stmt_errno(s);
-            mysql_stmt_free_result(s); // reset the statement before ROLLBACK
-            if (retryable(e))
-                return false;
-            die_stmt(s, what);
-        }
+        for (size_t b = n8 * 8; b < sz; b++) // tail (sz not a multiple of 8)
+            buf[b] = static_cast<unsigned char>(w.next() & 0xFFu);
     }
-    return true;
+
+    w.lat.reserve(static_cast<size_t>(g_cfg.blob_count));
+
+    pthread_barrier_wait(&g_start_barrier);
+
+    // Autocommit ON (server default): each blob INSERT is its own commit; no
+    // wrapping transaction (same rule as WL1).
+    for (long k = 0; k < g_cfg.blob_count; k++) {
+        id_val = static_cast<long long>(w.index) * g_cfg.blob_count + k;
+        std::memcpy(buf.data(), &id_val,
+                    std::min(sizeof(id_val), sz)); // id into first 8 bytes
+        md5_to_sink(buf.data(), sz); // MD5 of the whole buffer in app code
+        data_len = static_cast<unsigned long>(sz);
+        clock_t_::time_point t0 = clock_t_::now();
+        if (mysql_stmt_execute(st))
+            die_stmt(st, "blob insert failed");
+        w.lat.push_back(us_since(t0));
+        w.progress.store(k + 1, std::memory_order_relaxed);
+    }
+
+    mysql_stmt_close(st);
 }
 
-// Runs the transaction body once. Values are drawn immediately before each
-// statement executes (draw order = execution order). Returns true when
-// committed; false on a retryable error, with ROLLBACK already issued.
-static bool txn_once(Worker &w) {
-    const int64_t N = g_cfg.table_rows;
-    const int64_t R = g_cfg.range_size;
+static void wl4_blob_read(Worker &w) {
+    const size_t sz = static_cast<size_t>(g_cfg.blob_size);
+    MYSQL_STMT *st = prepare(w.conn, "SELECT data FROM bench_blob WHERE id = ?");
 
-    if (mysql_query(w.conn, "BEGIN") != 0) {
-        if (!retryable(mysql_errno(w.conn)))
-            die_conn(w.conn, "BEGIN failed");
-        rollback_ignore(w);
-        return false;
-    }
+    long long id_val = 0;
+    MYSQL_BIND p;
+    std::memset(&p, 0, sizeof(p));
+    p.buffer_type = MYSQL_TYPE_LONGLONG;
+    p.buffer = &id_val;
+    p.is_unsigned = 0;
+    if (mysql_stmt_bind_param(st, &p))
+        die_stmt(st, "bind param (blob read) failed");
 
-    for (int j = 0; j < 10; j++) { // 10 point selects
-        w.point_id[j] = 1 + lcg_rand(w, N);
-        if (!exec_stmt(w, j, true, "point select failed")) {
-            rollback_ignore(w);
-            return false;
+    std::vector<unsigned char> buf(sz);
+    unsigned long data_len = 0;
+    bind_bool is_null = 0, err = 0;
+    MYSQL_BIND r;
+    std::memset(&r, 0, sizeof(r));
+    r.buffer_type = MYSQL_TYPE_LONG_BLOB;
+    r.buffer = buf.data();
+    r.buffer_length = static_cast<unsigned long>(sz);
+    r.length = &data_len;
+    r.is_null = &is_null;
+    r.error = &err;
+    if (mysql_stmt_bind_result(st, &r))
+        die_stmt(st, "bind result (blob read) failed");
+
+    w.lat.reserve(static_cast<size_t>(g_cfg.blob_count));
+
+    pthread_barrier_wait(&g_start_barrier);
+
+    for (long k = 0; k < g_cfg.blob_count; k++) {
+        id_val = static_cast<long long>(w.index) * g_cfg.blob_count + k;
+        data_len = 0;
+        clock_t_::time_point t0 = clock_t_::now();
+        if (mysql_stmt_execute(st))
+            die_stmt(st, "blob read execute failed");
+        int rc = mysql_stmt_fetch(st);
+        if (rc == MYSQL_NO_DATA)
+            die("blob read: missing row for id");
+        if (rc != 0 && rc != MYSQL_DATA_TRUNCATED)
+            die_stmt(st, "blob read fetch failed");
+        unsigned long got = data_len;
+        if (got > sz) // bound buffer is sized to BENCH_BLOB_SIZE exactly
+            die("blob read: row larger than BENCH_BLOB_SIZE");
+        // Drain any trailing rows (ids are unique, so normally none).
+        while ((rc = mysql_stmt_fetch(st)) == 0 || rc == MYSQL_DATA_TRUNCATED) {
         }
+        if (rc != MYSQL_NO_DATA)
+            die_stmt(st, "blob read drain failed");
+        w.lat.push_back(us_since(t0));
+        md5_to_sink(buf.data(), static_cast<size_t>(got)); // MD5 in app code
+        w.progress.store(k + 1, std::memory_order_relaxed);
     }
 
-    const char *range_what[4] = {"simple range failed", "sum range failed",
-                                 "order range failed", "distinct range failed"};
-    for (int j = 0; j < 4; j++) { // 4 range selects (no clamping past N)
-        w.range_lo[j] = 1 + lcg_rand(w, N);
-        w.range_hi[j] = w.range_lo[j] + R - 1;
-        if (!exec_stmt(w, 10 + j, true, range_what[j])) {
-            rollback_ignore(w);
-            return false;
-        }
-    }
-
-    w.upd_idx_id = 1 + lcg_rand(w, N); // index update
-    if (!exec_stmt(w, 14, false, "index update failed")) {
-        rollback_ignore(w);
-        return false;
-    }
-
-    w.upd_nonidx_id = 1 + lcg_rand(w, N); // non-index update
-    if (!exec_stmt(w, 15, false, "non-index update failed")) {
-        rollback_ignore(w);
-        return false;
-    }
-
-    w.del_ins_id = 1 + lcg_rand(w, N); // delete+insert share the id
-    w.ins_k = lcg_rand(w, N);
-    if (!exec_stmt(w, 16, false, "delete failed")) {
-        rollback_ignore(w);
-        return false;
-    }
-    if (!exec_stmt(w, 17, false, "insert failed")) {
-        rollback_ignore(w);
-        return false;
-    }
-
-    if (mysql_query(w.conn, "COMMIT") != 0) {
-        if (!retryable(mysql_errno(w.conn)))
-            die_conn(w.conn, "COMMIT failed");
-        rollback_ignore(w);
-        return false;
-    }
-    return true;
-}
-
-// Retries until the transaction commits; the PRNG stream simply continues,
-// so every retry redraws all values.
-static void run_txn(Worker &w) {
-    while (!txn_once(w))
-        w.retries++;
+    mysql_stmt_close(st);
 }
 
 // ---- worker thread ----------------------------------------------------------
 
 static void worker_main(Worker *wp) {
     Worker &w = *wp;
-
     worker_connect(w);
-    worker_prepare(w);
 
-    for (int64_t i = 0; i < g_cfg.warmup_txns; i++) // untimed warmup
-        run_txn(w);
-    w.retries = 0; // report retries from the timed window only
-
-    pthread_barrier_wait(&g_start_barrier);
-
-    using clock = std::chrono::steady_clock;
-    auto timed_txn = [&w]() {
-        clock::time_point t0 = clock::now(); // just before the first BEGIN
-        run_txn(w);                          // retry time included
-        w.lat.push_back(static_cast<uint64_t>(
-            std::chrono::duration_cast<std::chrono::microseconds>(clock::now() -
-                                                                  t0)
-                .count())); // integer microseconds, truncated
-    };
-    if (g_cfg.duration_s > 0) {
-        // Duration mode: deadline checked BEFORE each new transaction; a
-        // transaction in flight at the deadline (retries included) completes.
-        const clock::time_point deadline =
-            clock::now() + std::chrono::seconds(g_cfg.duration_s);
-        while (clock::now() < deadline)
-            timed_txn();
-    } else {
-        for (int64_t i = 0; i < g_cfg.txns_per_thread; i++) // events mode
-            timed_txn();
+    switch (g_cfg.workload) {
+    case 1: wl1_int_insert(w); break;
+    case 2: wl2_int_read(w); break;
+    case 3: wl3_blob_insert(w); break;
+    case 4: wl4_blob_read(w); break;
+    default: die("BENCH_WORKLOAD must be 1..4");
     }
 
-    for (int j = 0; j < 18; j++)
-        mysql_stmt_close(w.st[j]);
     mysql_close(w.conn);
     mysql_thread_end();
+}
+
+// ---- workload metadata ------------------------------------------------------
+
+static const char *workload_name(int64_t wl) {
+    switch (wl) {
+    case 1: return "int-insert";
+    case 2: return "int-read";
+    case 3: return "blob-insert";
+    case 4: return "blob-read";
+    default: return "unknown";
+    }
+}
+
+static const char *workload_unit(int64_t wl) {
+    return (wl == 3 || wl == 4) ? "blobs/s" : "rows/s";
+}
+
+static bool workload_is_blob(int64_t wl) { return wl == 3 || wl == 4; }
+
+// ---- progress file (atomic tmp + rename) ------------------------------------
+
+static void write_progress(const std::vector<Worker> &workers,
+                           clock_t_::time_point t_start) {
+    long ops = 0;
+    for (const Worker &w : workers)
+        ops += w.progress.load(std::memory_order_relaxed);
+    double elapsed = std::chrono::duration<double>(clock_t_::now() - t_start).count();
+    double thr = elapsed > 0.0 ? static_cast<double>(ops) / elapsed : 0.0;
+
+    const std::string tmp = g_cfg.progress_file + ".tmp";
+    FILE *f = std::fopen(tmp.c_str(), "w");
+    if (!f)
+        return; // progress is best-effort; never fail the benchmark over it
+    std::fprintf(f,
+                 "{\"workload\":%" PRId64 ",\"workload_name\":\"%s\","
+                 "\"unit\":\"%s\",\"threads\":%" PRId64 ",\"ops\":%ld,"
+                 "\"elapsed_s\":%.3f,\"throughput\":%.1f,\"partial\":true}\n",
+                 g_cfg.workload, workload_name(g_cfg.workload),
+                 workload_unit(g_cfg.workload), g_cfg.threads, ops, elapsed,
+                 thr);
+    std::fclose(f);
+    (void)std::rename(tmp.c_str(), g_cfg.progress_file.c_str());
 }
 
 // ---- helpers ----------------------------------------------------------------
 
 static std::string compiler_version() {
-    // __VERSION__ on g++ is "X.Y.Z" possibly followed by vendor info;
-    // keep the first token only.
+    // __VERSION__ on g++ is "X.Y.Z" possibly followed by vendor info; keep the
+    // first token only.
     std::string v = __VERSION__;
     std::string::size_type sp = v.find(' ');
     if (sp != std::string::npos)
@@ -450,38 +507,37 @@ static std::string compiler_version() {
 int main() {
     // ---- configuration (environment only) ----------------------------------
     g_cfg.host = env_str("MYSQL_HOST");
-    int64_t port = env_int("MYSQL_PORT");
+    g_cfg.port = static_cast<unsigned int>(env_int("MYSQL_PORT"));
     g_cfg.user = env_str("MYSQL_USER");
     g_cfg.password = env_str("MYSQL_PASSWORD");
     g_cfg.db = env_str("MYSQL_DB");
-    g_cfg.port = static_cast<unsigned int>(port);
 
-    g_cfg.table_rows = env_int("BENCH_TABLE_ROWS");
+    g_cfg.workload = env_int("BENCH_WORKLOAD");
     g_cfg.threads = env_int("BENCH_THREADS");
-    g_cfg.warmup_txns = env_int("BENCH_WARMUP_TXNS");
-    g_cfg.duration_s = env_int_or("BENCH_DURATION_S", 0);
-    // Duration mode ignores BENCH_TXNS_PER_THREAD (it need not be set);
-    // events mode requires it, exactly as before.
-    g_cfg.txns_per_thread = g_cfg.duration_s > 0
-                                ? env_int_or("BENCH_TXNS_PER_THREAD", 0)
-                                : env_int("BENCH_TXNS_PER_THREAD");
-    g_cfg.range_size = env_int_or("BENCH_RANGE_SIZE", 100);
     g_cfg.seed = env_int("BENCH_SEED");
+    g_cfg.int_rows = env_int_or("BENCH_INT_ROWS", 1000000);
+    g_cfg.int_batch = env_int_or("BENCH_INT_BATCH", 10);
+    g_cfg.blob_count = env_int_or("BENCH_BLOB_COUNT", 100);
+    g_cfg.blob_size = env_int_or("BENCH_BLOB_SIZE", 1048576);
+    g_cfg.progress_file = env_str_or("BENCH_PROGRESS_FILE", "");
+    g_cfg.progress_sec = env_int_or("BENCH_PROGRESS_SEC", 5);
+    if (g_cfg.progress_sec < 1)
+        g_cfg.progress_sec = 1;
 
-    if (g_cfg.table_rows <= 0 || g_cfg.threads <= 0 ||
-        (g_cfg.duration_s <= 0 && g_cfg.txns_per_thread <= 0) ||
-        g_cfg.warmup_txns < 0 || g_cfg.range_size <= 0 || g_cfg.duration_s < 0)
-        die("BENCH_TABLE_ROWS/BENCH_THREADS/BENCH_TXNS_PER_THREAD/"
-            "BENCH_RANGE_SIZE must be > 0, BENCH_WARMUP_TXNS/BENCH_DURATION_S"
-            " >= 0");
-
-    for (int i = 0; i < 12; i++)
-        C_VAL += "abcdefghij"; // 120 chars
-    for (int i = 0; i < 6; i++)
-        PAD_VAL += "0123456789"; // 60 chars
+    if (g_cfg.workload < 1 || g_cfg.workload > 4)
+        die("BENCH_WORKLOAD must be 1..4");
+    if (g_cfg.threads <= 0)
+        die("BENCH_THREADS must be > 0");
+    if ((g_cfg.workload == 1 || g_cfg.workload == 2) && g_cfg.int_rows <= 0)
+        die("BENCH_INT_ROWS must be > 0");
+    if (g_cfg.workload == 1 &&
+        (g_cfg.int_batch <= 0 || g_cfg.int_rows % g_cfg.int_batch != 0))
+        die("BENCH_INT_BATCH must be > 0 and divide BENCH_INT_ROWS");
+    if ((g_cfg.workload == 3 || g_cfg.workload == 4) &&
+        (g_cfg.blob_count <= 0 || g_cfg.blob_size <= 0))
+        die("BENCH_BLOB_COUNT and BENCH_BLOB_SIZE must be > 0");
 
     // ---- library + workers --------------------------------------------------
-    // Must run before any thread touches the client library.
     if (mysql_library_init(0, nullptr, nullptr) != 0)
         die("mysql_library_init failed");
 
@@ -489,18 +545,13 @@ int main() {
     if (pthread_barrier_init(&g_start_barrier, nullptr, nthreads + 1) != 0)
         die("pthread_barrier_init failed");
 
-    // Constructed up front and never resized: worker addresses stay stable
-    // for the bind buffers and the threads that reference them.
+    // Sized once and never resized: worker addresses (and their atomics /
+    // latency vectors) stay stable for the threads that reference them.
     std::vector<Worker> workers(static_cast<size_t>(g_cfg.threads));
     for (int64_t i = 0; i < g_cfg.threads; i++) {
         Worker &w = workers[static_cast<size_t>(i)];
         w.index = static_cast<int>(i);
         w.lcg = seed31(g_cfg.seed + i); // independent stream per worker
-        // Events mode: exact size known up front. Duration mode: unknown
-        // count, grow dynamically from a modest initial reservation.
-        w.lat.reserve(g_cfg.duration_s > 0
-                          ? 4096
-                          : static_cast<size_t>(g_cfg.txns_per_thread));
     }
 
     std::vector<std::thread> threads;
@@ -508,72 +559,116 @@ int main() {
     for (int64_t i = 0; i < g_cfg.threads; i++)
         threads.emplace_back(worker_main, &workers[static_cast<size_t>(i)]);
 
-    // Workers connect, prepare, warm up, then park at the barrier. Our own
-    // wait is the (threads+1)-th arrival: returning from it releases them.
-    using clock = std::chrono::steady_clock;
+    // Workers connect, prepare, then park at the barrier. Our own wait is the
+    // (threads+1)-th arrival: returning from it releases them.
     pthread_barrier_wait(&g_start_barrier);
-    const clock::time_point t_start = clock::now();
+    const clock_t_::time_point t_start = clock_t_::now();
+
+    // ---- progress monitor thread (optional) ---------------------------------
+    std::mutex mon_mtx;
+    std::condition_variable mon_cv;
+    bool mon_stop = false;
+    std::thread monitor;
+    if (!g_cfg.progress_file.empty()) {
+        monitor = std::thread([&] {
+            std::unique_lock<std::mutex> lk(mon_mtx);
+            const auto period = std::chrono::seconds(g_cfg.progress_sec);
+            while (!mon_stop) {
+                if (mon_cv.wait_for(lk, period, [&] { return mon_stop; }))
+                    break; // stop signaled
+                lk.unlock();
+                write_progress(workers, t_start); // timed-out: checkpoint
+                lk.lock();
+            }
+        });
+    }
 
     for (auto &t : threads)
         t.join();
-    const clock::time_point t_end = clock::now();
+    const clock_t_::time_point t_end = clock_t_::now();
+
+    if (monitor.joinable()) {
+        {
+            std::lock_guard<std::mutex> lk(mon_mtx);
+            mon_stop = true;
+        }
+        mon_cv.notify_all();
+        monitor.join();
+    }
 
     pthread_barrier_destroy(&g_start_barrier);
 
     const double elapsed_s =
         std::chrono::duration<double>(t_end - t_start).count();
 
-    // ---- merge + statistics --------------------------------------------------
-    // txns = actual committed timed transactions across workers (in events
-    // mode this equals BENCH_THREADS * BENCH_TXNS_PER_THREAD).
+    // ---- merge + statistics -------------------------------------------------
+    long ops = 0; // completed operations (rows WL1/2, blobs WL3/4)
+    for (const Worker &w : workers)
+        ops += w.progress.load(std::memory_order_relaxed);
+
+    std::vector<uint64_t> lat;
     size_t total = 0;
     for (const Worker &w : workers)
         total += w.lat.size();
-    const int64_t txns = static_cast<int64_t>(total);
-    uint64_t retries = 0;
-    std::vector<uint64_t> lat;
     lat.reserve(total);
-    for (const Worker &w : workers) {
-        retries += w.retries;
+    for (const Worker &w : workers)
         lat.insert(lat.end(), w.lat.begin(), w.lat.end());
-    }
     std::sort(lat.begin(), lat.end());
 
-    const int64_t n = txns;
+    const int64_t n = static_cast<int64_t>(lat.size());
     auto pct = [&](int64_t x) -> uint64_t {
-        // p(x) = arr[ceil(x/100 * n) - 1], 0-based
-        int64_t idx = (x * n + 99) / 100 - 1;
+        if (n == 0)
+            return 0;
+        int64_t idx = (x * n + 99) / 100 - 1; // p(x) = arr[ceil(x/100*n)-1]
         if (idx < 0)
             idx = 0;
         return lat[static_cast<size_t>(idx)];
     };
     const uint64_t p50 = pct(50), p95 = pct(95), p99 = pct(99);
-    const uint64_t max_us = lat[static_cast<size_t>(n - 1)];
-    const double tps =
-        elapsed_s > 0.0 ? static_cast<double>(txns) / elapsed_s : 0.0;
-    const double qps = tps * 20.0; // 18 statements + BEGIN + COMMIT
+    const uint64_t max_us = n > 0 ? lat[static_cast<size_t>(n - 1)] : 0;
 
-    // ---- metadata -------------------------------------------------------------
+    const double throughput =
+        elapsed_s > 0.0 ? static_cast<double>(ops) / elapsed_s : 0.0;
+
+    // mb_per_s: blob workloads only; int workloads report 0 (per SPEC example).
+    char mb_buf[32];
+    if (workload_is_blob(g_cfg.workload)) {
+        double mb = elapsed_s > 0.0
+                        ? static_cast<double>(ops) *
+                              static_cast<double>(g_cfg.blob_size) / 1e6 /
+                              elapsed_s
+                        : 0.0;
+        std::snprintf(mb_buf, sizeof(mb_buf), "%.1f", mb);
+    } else {
+        std::snprintf(mb_buf, sizeof(mb_buf), "0");
+    }
+
+    // ---- metadata -----------------------------------------------------------
     const char *driver_version = mysql_get_client_info();
     const std::string runtime_version = compiler_version();
-    char hostname[256];
-    if (gethostname(hostname, sizeof(hostname)) != 0)
-        std::snprintf(hostname, sizeof(hostname), "unknown");
-    hostname[sizeof(hostname) - 1] = '\0';
+    char client_host[256];
+    if (gethostname(client_host, sizeof(client_host)) != 0)
+        std::snprintf(client_host, sizeof(client_host), "unknown");
+    client_host[sizeof(client_host) - 1] = '\0';
+
+    // ---- one JSON line on stdout --------------------------------------------
+    std::printf(
+        "{\"lang\":\"cpp\",\"workload\":%" PRId64 ",\"workload_name\":\"%s\","
+        "\"unit\":\"%s\",\"driver\":\"libmysqlclient\",\"driver_version\":\"%s\","
+        "\"runtime_version\":\"%s\",\"prepared\":true,\"client_host\":\"%s\","
+        "\"db_host\":\"%s\",\"threads\":%" PRId64 ",\"ops\":%ld,\"errors\":0,"
+        "\"elapsed_s\":%.3f,\"throughput\":%.1f,\"mb_per_s\":%s,"
+        "\"p50_us\":%" PRIu64 ",\"p95_us\":%" PRIu64 ",\"p99_us\":%" PRIu64
+        ",\"max_us\":%" PRIu64 ",\"client_cpu_s\":0,\"server_cpu_s\":0}\n",
+        g_cfg.workload, workload_name(g_cfg.workload),
+        workload_unit(g_cfg.workload), driver_version, runtime_version.c_str(),
+        client_host, g_cfg.host, g_cfg.threads, ops, elapsed_s, throughput,
+        mb_buf, p50, p95, p99, max_us);
+
+    // Progress data is now superseded by stdout: delete the checkpoint.
+    if (!g_cfg.progress_file.empty())
+        (void)std::remove(g_cfg.progress_file.c_str());
 
     mysql_library_end();
-
-    // ---- one JSON line on stdout ----------------------------------------------
-    std::printf("{\"lang\":\"cpp\",\"driver\":\"libmysqlclient\","
-                "\"driver_version\":\"%s\",\"runtime_version\":\"%s\","
-                "\"prepared\":true,\"client_host\":\"%s\",\"db_host\":\"%s\","
-                "\"threads\":%" PRId64 ",\"txns\":%" PRId64
-                ",\"retries\":%" PRIu64 ",\"errors\":0,\"elapsed_s\":%.3f,"
-                "\"tps\":%.1f,\"qps\":%.1f,\"p50_us\":%" PRIu64
-                ",\"p95_us\":%" PRIu64 ",\"p99_us\":%" PRIu64
-                ",\"max_us\":%" PRIu64 "}\n",
-                driver_version, runtime_version.c_str(), hostname, g_cfg.host,
-                g_cfg.threads, txns, retries, elapsed_s, tps, qps, p50, p95,
-                p99, max_us);
     return 0;
 }

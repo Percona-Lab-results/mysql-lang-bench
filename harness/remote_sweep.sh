@@ -1,99 +1,97 @@
 #!/usr/bin/env bash
-# Runs ON the remote host (launched detached by run_sweep.sh).
+# Runs ON a benchmark host (launched detached by run_sweep.sh).
 # Usage: remote_sweep.sh <sweep_id> <lang> [lang...]
-# For each language: reload the table ONCE (full load is expensive at 10M rows),
-# then run every thread count in BENCH_THREADS_LIST without reloading between
-# rungs. Results: results/<sweep_id>-<lang>-t<N>.json. Status: results/<sweep_id>.status.
+#
+# v3 micro-workloads. For each language: create the schema, then for each
+# worker count run the configured workloads in order (1 insert ints, 2 read
+# ints, 3 insert blobs, 4 read blobs), truncating before each insert workload
+# so reads see freshly-inserted (cached) data. No pre-warming. Go and C# are
+# run twice per cell -- stock and tuned runtime -- tagged in the JSON.
+#
+# Per-run artifact: results/<sweep_id>-<lang>-w<W>-t<N>[-stock|-tuned].json
+# Status: results/<sweep_id>.status ; log: results/<sweep_id>.log
 set -u
 cd "$(dirname "$0")/.."
 SWEEP_ID=$1; shift
 LANGS="$*"
 mkdir -p results
-# 512 workers need >512 fds in one process (Node) / one parent (PHP);
-# module loading across hundreds of isolates spikes well beyond that.
-ulimit -n 65536 2>/dev/null || ulimit -n 4096 2>/dev/null || true
 STATUS="results/$SWEEP_ID.status"
 LOG="results/$SWEEP_ID.log"
-source common/workload.env
-# The caller may force a mode without editing the deployed workload.env
-# (e.g. run both modes back to back).
-if [ -n "${BENCH_DURATION_OVERRIDE:-}" ]; then
-    BENCH_DURATION_S="$BENCH_DURATION_OVERRIDE"
-fi
+# 512 forked workers (PHP/Lua) and many connections need generous fd limits.
+ulimit -n 65536 2>/dev/null || true
+
+set -a; source config/mysql.env; source "${BENCH_WORKLOAD_ENV:-common/workload.env}"; set +a
+CLK=$(getconf CLK_TCK)
+MYSQL=("${MYSQL_CLI:-mysql}" --no-defaults --protocol=TCP -h "$MYSQL_HOST" \
+       -P "$MYSQL_PORT" -u "$MYSQL_USER" -p"$MYSQL_PASSWORD" "$MYSQL_DB")
 
 overall=DONE
 for L in $LANGS; do
-    echo "RUNNING $L prepare" > "$STATUS"
-    if ! bash harness/remote_prepare.sh >> "$LOG" 2>&1; then
-        overall="FAILED ($L prepare)"
-        break
+    echo "RUNNING $L schema" > "$STATUS"
+    if ! "${MYSQL[@]}" < common/schema.sql >> "$LOG" 2>&1; then
+        overall="FAILED ($L schema)"; break
     fi
-    # One long READ-ONLY sysbench warm-up per sweep (both modes), after the
-    # load and before rung 1, to initialize the server caches. Read-only
-    # keeps the table byte-identical for every language.
-    if [ "${BENCH_SYSBENCH_WARMUP_S:-0}" -gt 0 ]; then
-        echo "RUNNING $L sysbench-warmup (${BENCH_SYSBENCH_WARMUP_S}s)" > "$STATUS"
-        if ! (
-            set -euo pipefail
-            set -a; source config/mysql.env; source common/workload.env; set +a
-            sysbench common/sysbench_warmup.lua \
-                --mysql-host="$MYSQL_HOST" --mysql-port="$MYSQL_PORT" \
-                --mysql-user="$MYSQL_USER" --mysql-password="$MYSQL_PASSWORD" \
-                --mysql-db="$MYSQL_DB" --threads=32 \
-                --time="$BENCH_SYSBENCH_WARMUP_S" --report-interval=60 run
-        ) >> "$LOG" 2>&1; then
-            overall="FAILED ($L sysbench-warmup)"
-            break
-        fi
-    fi
-    for T in $BENCH_THREADS_LIST; do
-        echo "RUNNING $L t=$T" > "$STATUS"
-        if (
-            set -euo pipefail
-            set -a
-            source config/mysql.env
-            source common/workload.env
-            set +a
-            if [ -n "${BENCH_DURATION_OVERRIDE:-}" ]; then
-                export BENCH_DURATION_S="$BENCH_DURATION_OVERRIDE"
-            fi
-            export BENCH_THREADS="$T"
-            OUT="results/$SWEEP_ID-$L-t$T.json"
-            CPUF="results/$SWEEP_ID-$L-t$T.cpu"
-            # CPU accounting: client = user+sys of the whole benchmark process
-            # tree (covers forked/threaded workers); server = mysqld's
-            # cumulative utime+stime delta over the same window. The window is
-            # the full run (connect + warmup + timed + teardown), slightly
-            # wider than elapsed_s but identical in shape for every language.
-            MYSQLD_PID=$(pgrep -x mysqld | head -1)
-            CLK=$(getconf CLK_TCK)
-            SRV0=$(awk '{print $14+$15}' "/proc/$MYSQLD_PID/stat")
-            W0=$(date +%s.%N)
-            /usr/bin/time -o "$CPUF" -f "%U %S" bash "impl/$L/run.sh" > "$OUT"
-            W1=$(date +%s.%N)
-            SRV1=$(awk '{print $14+$15}' "/proc/$MYSQLD_PID/stat")
-            python3 - "$OUT" "$CPUF" "$SRV0" "$SRV1" "$CLK" "$W0" "$W1" "${BENCH_DURATION_S:-0}" <<'PYEOF'
+    fail=0
+    for N in $BENCH_THREADS_LIST; do
+        for W in $BENCH_WORKLOADS; do
+            # Go and C# run stock + tuned; everyone else runs once.
+            case "$L" in
+                go|csharp) VARIANTS="0 1" ;;
+                *)         VARIANTS="-" ;;
+            esac
+            for V in $VARIANTS; do
+                # Fresh table before EACH insert run (reads keep the data).
+                # Must be per-variant: go/csharp run an insert cell twice, and
+                # the blob table has a PRIMARY KEY, so a second un-truncated
+                # run would hit duplicate-key on the same ids.
+                if [ "$W" = 1 ]; then "${MYSQL[@]}" -e "TRUNCATE bench_int;"  >> "$LOG" 2>&1; fi
+                if [ "$W" = 3 ]; then "${MYSQL[@]}" -e "TRUNCATE bench_blob;" >> "$LOG" 2>&1; fi
+                suffix=""; tuned="null"
+                if [ "$V" = 0 ]; then suffix="-stock"; tuned="false"; fi
+                if [ "$V" = 1 ]; then suffix="-tuned"; tuned="true";  fi
+                OUT="results/$SWEEP_ID-$L-w$W-t$N$suffix.json"
+                CPUF="results/.cpu.$$"
+                echo "RUNNING $L w=$W t=$N${suffix}" > "$STATUS"
+                MYSQLD_PID=$(pgrep -x mysqld | head -1)
+                SRV0=$(awk '{print $14+$15}' "/proc/$MYSQLD_PID/stat")
+                W0=$(date +%s.%N)
+                if ( set -euo pipefail
+                     set -a; source config/mysql.env; source "${BENCH_WORKLOAD_ENV:-common/workload.env}"; set +a
+                     export BENCH_WORKLOAD="$W" BENCH_THREADS="$N"
+                     export BENCH_PROGRESS_FILE="$OUT.progress"
+                     [ "$V" != "-" ] && export BENCH_TUNED="$V"
+                     /usr/bin/time -o "$CPUF" -f "%U %S" bash "impl/$L/run.sh" > "$OUT.tmp"
+                   ) >> "$LOG" 2>&1; then
+                    W1=$(date +%s.%N)
+                    SRV1=$(awk '{print $14+$15}' "/proc/$MYSQLD_PID/stat")
+                    python3 - "$OUT" "$CPUF" "$SRV0" "$SRV1" "$CLK" "$W0" "$W1" "$tuned" <<'PYEOF'
 import json, sys
 out, cpuf = sys.argv[1], sys.argv[2]
 srv0, srv1, clk, w0, w1 = map(float, sys.argv[3:8])
-dur = int(sys.argv[8])
+tuned = sys.argv[8]
 u, s = map(float, open(cpuf).read().split()[:2])
-r = json.load(open(out))
+r = json.load(open(out + ".tmp"))
 r["client_cpu_s"] = round(u + s, 2)
 r["server_cpu_s"] = round((srv1 - srv0) / clk, 2)
 r["run_wall_s"] = round(w1 - w0, 2)
-r["mode"] = "duration" if dur > 0 else "events"
-r["duration_s"] = dur
+if tuned != "null":
+    r["tuned"] = (tuned == "true")
 json.dump(r, open(out, "w"), separators=(",", ":"))
 PYEOF
-            rm -f "$CPUF"
-        ) >> "$LOG" 2>&1; then
-            echo "$L t=$T ok" >> "$LOG"
-        else
-            echo "$L t=$T FAILED" >> "$LOG"
-            overall="FAILED ($L t=$T)"
-            break 2
-        fi
+                    rm -f "$OUT.tmp" "$CPUF" "$OUT.progress"
+                    echo "$L w=$W t=$N$suffix ok" >> "$LOG"
+                else
+                    # leave $OUT.progress behind: it holds the partial result of
+                    # this interrupted/failed cell for recovery.
+                    rm -f "$OUT.tmp" "$CPUF"
+                    echo "$L w=$W t=$N$suffix FAILED" >> "$LOG"
+                    overall="FAILED ($L w=$W t=$N$suffix)"; fail=1; break
+                fi
+            done
+            [ "$fail" = 1 ] && break
+        done
+        [ "$fail" = 1 ] && break
     done
+    [ "$fail" = 1 ] && break
 done
 echo "$overall" > "$STATUS"

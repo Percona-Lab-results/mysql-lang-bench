@@ -8,5 +8,6 @@ if ! command -v mysql_config >/dev/null 2>&1; then
     exit 1
 fi
 
+# OpenSSL MD5 (libcrypto) is required for the blob workloads (WL3/WL4).
 # shellcheck disable=SC2046  # word splitting of mysql_config output is intended
-c++ -std=c++17 -O2 -pthread bench.cpp -o bench $(mysql_config --cflags --libs)
+c++ -std=c++17 -O2 -pthread bench.cpp -o bench $(mysql_config --cflags --libs) -lcrypto

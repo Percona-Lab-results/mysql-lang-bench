@@ -7,6 +7,7 @@ build = "build.rs"
 # driver_version in src/main.rs is hardcoded to match this exact pin.
 [dependencies]
 mysql = { version = "=25.0.1", default-features = false, features = ["minimal"] }
+md-5 = "0.10"
 
 [profile.release]
 opt-level = 3

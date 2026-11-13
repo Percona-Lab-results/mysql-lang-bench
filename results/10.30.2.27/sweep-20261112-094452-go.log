@@ -1,0 +1,3 @@
+Table	Op	Msg_type	Msg_text
+bench.sbtest	analyze	status	OK
+table reloaded: 10000000 rows

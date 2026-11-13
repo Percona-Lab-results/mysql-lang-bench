@@ -1,9 +1,12 @@
-DROP TABLE IF EXISTS sbtest;
-CREATE TABLE sbtest (
-  id  INT UNSIGNED NOT NULL AUTO_INCREMENT,
-  k   INT UNSIGNED NOT NULL DEFAULT 0,
-  c   CHAR(120) NOT NULL DEFAULT '',
-  pad CHAR(60) NOT NULL DEFAULT '',
-  PRIMARY KEY (id),
-  KEY k_idx (k)
+-- v3 micro-workload tables. No secondary indexes: maximize insert speed.
+DROP TABLE IF EXISTS bench_int;
+DROP TABLE IF EXISTS bench_blob;
+
+CREATE TABLE bench_int (
+  val INT NOT NULL
+) ENGINE=InnoDB;
+
+CREATE TABLE bench_blob (
+  id   BIGINT NOT NULL PRIMARY KEY,
+  data LONGBLOB NOT NULL
 ) ENGINE=InnoDB;

@@ -1,8 +1,8 @@
 {
   "name": "mysql-lang-bench-typescript",
-  "version": "2.0.0",
+  "version": "3.0.0",
   "private": true,
-  "description": "MySQL language benchmark - TypeScript (Node.js worker_threads + mysql2, compiled with tsc)",
+  "description": "MySQL language benchmark - TypeScript v3 four micro-workloads (Node.js worker_threads + mysql2, compiled with tsc)",
   "type": "module",
   "dependencies": {
     "mysql2": "^3.14.0"

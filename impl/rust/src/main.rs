@@ -1,31 +1,38 @@
-// MySQL language benchmark — Rust implementation (SPEC.md v2).
-// Multithreaded sysbench-oltp_read_write-style transactional workload:
-// each worker thread owns one connection, its own server-side prepared
-// statements and its own PRNG stream. Timing is barrier-based.
+// MySQL language benchmark — Rust implementation (SPEC.md v3).
+//
+// One of four micro-workloads, selected by BENCH_WORKLOAD (1..4), run by
+// BENCH_THREADS worker threads. Each worker owns one TCP connection and its
+// own PRNG stream; every worker performs the full per-worker amount (work
+// scales with worker count — nothing is shared/divided). Timing is
+// barrier-based: workers connect + prepare, wait at a start barrier, main
+// releases it and samples a monotonic clock, joins, samples again.
+//
+//   WL1 int-insert  : prepared multi-row INSERT (BENCH_INT_BATCH placeholders)
+//   WL2 int-scan    : SELECT val ... LIMIT n, sum in app code (i64)
+//   WL3 blob-insert : generate BENCH_BLOB_SIZE bytes, MD5, INSERT blob
+//   WL4 blob-read   : SELECT data WHERE id=?, MD5 each blob
+//
+// Intermediate progress: when BENCH_PROGRESS_FILE is set, each worker bumps a
+// per-worker atomic slot as operations complete; a monitor thread sums the
+// slots every BENCH_PROGRESS_SEC seconds and atomically overwrites the file
+// (tmp + rename) with one partial JSON line. The file is deleted on success.
 
+use std::fs;
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::Barrier;
+use std::thread;
 use std::time::{Duration, Instant};
 
+use md5::{Digest, Md5};
 use mysql::prelude::Queryable;
-use mysql::{Conn, OptsBuilder, Row, Statement};
+use mysql::{Conn, OptsBuilder, Params, Value};
 
 /// Must match the exact version pinned in Cargo.toml.
 const DRIVER_VERSION: &str = "25.0.1";
 
-const SQL_POINT_SELECT: &str = "SELECT c FROM sbtest WHERE id = ?";
-const SQL_SIMPLE_RANGE: &str = "SELECT c FROM sbtest WHERE id BETWEEN ? AND ?";
-const SQL_SUM_RANGE: &str = "SELECT SUM(k) FROM sbtest WHERE id BETWEEN ? AND ?";
-const SQL_ORDER_RANGE: &str = "SELECT c FROM sbtest WHERE id BETWEEN ? AND ? ORDER BY c";
-const SQL_DISTINCT_RANGE: &str =
-    "SELECT DISTINCT c FROM sbtest WHERE id BETWEEN ? AND ? ORDER BY c";
-const SQL_INDEX_UPDATE: &str = "UPDATE sbtest SET k = k + 1 WHERE id = ?";
-const SQL_NON_INDEX_UPDATE: &str = "UPDATE sbtest SET c = ? WHERE id = ?";
-const SQL_DELETE: &str = "DELETE FROM sbtest WHERE id = ?";
-const SQL_INSERT: &str = "INSERT INTO sbtest (id, k, c, pad) VALUES (?, ?, ?, ?)";
-
 /// 31-bit LCG per SPEC.md. State and products fit in u64 (state < 2^31,
 /// 2^31 * 1103515245 < 2^62), so plain u64 arithmetic is exact.
-/// Validation (seed 42): rand(100) -> 27, 64, 53, 6, 35.
+/// Validation (seed 42, worker 0): first next() = 1250496027.
 struct Lcg {
     state: u64,
 }
@@ -35,14 +42,10 @@ impl Lcg {
         Lcg { state: seed }
     }
 
+    #[inline]
     fn next(&mut self) -> u64 {
         self.state = (self.state * 1103515245 + 12345) % 2147483648; // 2^31
         self.state
-    }
-
-    /// Uniform 0..n-1.
-    fn rand(&mut self, n: u64) -> u64 {
-        self.next() % n
     }
 }
 
@@ -57,14 +60,14 @@ fn env_u64(name: &str) -> Result<u64, String> {
         .map_err(|e| format!("invalid integer in {}={:?}: {}", name, raw, e))
 }
 
-/// Like env_u64 but falls back to `default` when the variable is unset.
+/// Like env_u64 but falls back to `default` when the variable is unset or empty.
 fn env_u64_or(name: &str, default: u64) -> Result<u64, String> {
     match std::env::var(name) {
-        Ok(raw) => raw
+        Ok(raw) if !raw.trim().is_empty() => raw
             .trim()
             .parse::<u64>()
             .map_err(|e| format!("invalid integer in {}={:?}: {}", name, raw, e)),
-        Err(_) => Ok(default),
+        _ => Ok(default),
     }
 }
 
@@ -91,165 +94,20 @@ struct Cfg {
     user: String,
     password: String,
     db: String,
-    table_rows: u64,
+    workload: u8,
     threads: u64,
-    warmup_txns: u64,
-    txns_per_thread: u64,
-    duration_s: u64, // 0 = events mode, > 0 = duration mode
-    range_size: u64,
     seed: u64,
-    c_val: String,   // "abcdefghij" x 12 (120 chars)
-    pad_val: String, // "0123456789" x 6 (60 chars)
+    int_rows: u64,
+    int_batch: u64,
+    blob_count: u64,
+    blob_size: u64,
 }
 
-/// The 18 server-side prepared statements of one transaction, one set per
-/// worker. The mysql crate caches prepared statements by SQL text, so the 10
-/// identical point-select slots share one server-side statement handle —
-/// exactly equivalent to preparing it once and executing it 10 times.
-struct Stmts {
-    point_selects: Vec<Statement>, // 10
-    simple_range: Statement,
-    sum_range: Statement,
-    order_range: Statement,
-    distinct_range: Statement,
-    index_update: Statement,
-    non_index_update: Statement,
-    delete: Statement,
-    insert: Statement,
-}
-
-fn prepare_all(conn: &mut Conn) -> Result<Stmts, mysql::Error> {
-    let mut point_selects = Vec::with_capacity(10);
-    for _ in 0..10 {
-        point_selects.push(conn.prep(SQL_POINT_SELECT)?);
-    }
-    Ok(Stmts {
-        point_selects,
-        simple_range: conn.prep(SQL_SIMPLE_RANGE)?,
-        sum_range: conn.prep(SQL_SUM_RANGE)?,
-        order_range: conn.prep(SQL_ORDER_RANGE)?,
-        distinct_range: conn.prep(SQL_DISTINCT_RANGE)?,
-        index_update: conn.prep(SQL_INDEX_UPDATE)?,
-        non_index_update: conn.prep(SQL_NON_INDEX_UPDATE)?,
-        delete: conn.prep(SQL_DELETE)?,
-        insert: conn.prep(SQL_INSERT)?,
-    })
-}
-
-/// Consume a `SELECT c ...` result fully (all rows), folding into the sink.
-fn consume_c_rows(rows: Vec<Row>, sink: &mut usize) {
-    for row in &rows {
-        if let Some(c) = row.get::<String, _>(0) {
-            *sink = sink.wrapping_add(c.len());
-        }
-    }
-}
-
-/// One attempt at the oltp_read_write transaction. Values are drawn
-/// immediately before executing each statement (draw order = execution order).
-fn try_txn(
-    conn: &mut Conn,
-    st: &Stmts,
-    rng: &mut Lcg,
-    cfg: &Cfg,
-    sink: &mut usize,
-) -> Result<(), mysql::Error> {
-    let n = cfg.table_rows;
-    let r = cfg.range_size;
-
-    conn.query_drop("BEGIN")?;
-
-    // 10 point selects.
-    for stmt in &st.point_selects {
-        let id = 1 + rng.rand(n);
-        let rows: Vec<Row> = conn.exec(stmt, (id,))?;
-        consume_c_rows(rows, sink);
-    }
-
-    // Simple range.
-    let lo = 1 + rng.rand(n);
-    let rows: Vec<Row> = conn.exec(&st.simple_range, (lo, lo + r - 1))?;
-    consume_c_rows(rows, sink);
-
-    // Sum range. SUM(k) is DECIMAL (NULL when the range matches no rows);
-    // with minimal features decode it as Option<String>.
-    let lo = 1 + rng.rand(n);
-    let rows: Vec<Row> = conn.exec(&st.sum_range, (lo, lo + r - 1))?;
-    for row in &rows {
-        if let Some(Some(s)) = row.get::<Option<String>, _>(0) {
-            *sink = sink.wrapping_add(s.len());
-        }
-    }
-
-    // Order range.
-    let lo = 1 + rng.rand(n);
-    let rows: Vec<Row> = conn.exec(&st.order_range, (lo, lo + r - 1))?;
-    consume_c_rows(rows, sink);
-
-    // Distinct range.
-    let lo = 1 + rng.rand(n);
-    let rows: Vec<Row> = conn.exec(&st.distinct_range, (lo, lo + r - 1))?;
-    consume_c_rows(rows, sink);
-
-    // Index update.
-    let id = 1 + rng.rand(n);
-    conn.exec_drop(&st.index_update, (id,))?;
-
-    // Non-index update.
-    let id = 1 + rng.rand(n);
-    conn.exec_drop(&st.non_index_update, (cfg.c_val.as_str(), id))?;
-
-    // Delete + insert (same id).
-    let id = 1 + rng.rand(n);
-    let k = rng.rand(n);
-    conn.exec_drop(&st.delete, (id,))?;
-    conn.exec_drop(
-        &st.insert,
-        (id, k, cfg.c_val.as_str(), cfg.pad_val.as_str()),
-    )?;
-
-    conn.query_drop("COMMIT")?;
-    Ok(())
-}
-
-/// Deadlock (1213), lock wait timeout (1205), duplicate key (1062).
-fn is_retryable(e: &mysql::Error) -> bool {
-    matches!(e, mysql::Error::MySqlError(me)
-        if me.code == 1213 || me.code == 1205 || me.code == 1062)
-}
-
-/// Run one transaction to successful COMMIT, retrying on concurrency errors
-/// with freshly drawn values (the PRNG stream continues). Non-retryable
-/// errors bubble up.
-fn run_txn(
-    conn: &mut Conn,
-    st: &Stmts,
-    rng: &mut Lcg,
-    cfg: &Cfg,
-    sink: &mut usize,
-    retries: &mut u64,
-) -> Result<(), mysql::Error> {
-    loop {
-        match try_txn(conn, st, rng, cfg, sink) {
-            Ok(()) => return Ok(()),
-            Err(e) if is_retryable(&e) => {
-                let _ = conn.query_drop("ROLLBACK"); // ignore rollback errors
-                *retries += 1;
-            }
-            Err(e) => return Err(e),
-        }
-    }
-}
-
-/// Worker body: connect, prepare, warm up, wait at the start barrier, run the
-/// timed transactions. Returns (latencies_us, retries).
-fn worker_inner(
-    cfg: &Cfg,
-    barrier: &Barrier,
-    idx: u64,
-) -> Result<(Vec<u64>, u64), mysql::Error> {
-    // One TCP connection per worker, autocommit ON (server default).
+fn connect(cfg: &Cfg) -> Result<Conn, mysql::Error> {
+    // One TCP connection per worker; autocommit ON (server default).
     // prefer_socket(false): never switch to a unix socket for localhost.
+    // The `minimal` feature compiles out TLS entirely, so the connection is
+    // plaintext TCP (SPEC: TLS disabled) — no ssl_opts needed.
     let opts = OptsBuilder::new()
         .ip_or_hostname(Some(cfg.host.as_str()))
         .tcp_port(cfg.port)
@@ -257,58 +115,221 @@ fn worker_inner(
         .pass(Some(cfg.password.as_str()))
         .db_name(Some(cfg.db.as_str()))
         .prefer_socket(false);
-    let mut conn = Conn::new(opts)?;
-    let st = prepare_all(&mut conn)?;
-
-    let mut rng = Lcg::new(cfg.seed + idx);
-    let mut sink: usize = 0; // consumes fetched SELECT data
-
-    // Warmup (untimed; its retries are not reported).
-    let mut warmup_retries = 0u64;
-    for _ in 0..cfg.warmup_txns {
-        run_txn(&mut conn, &st, &mut rng, cfg, &mut sink, &mut warmup_retries)?;
-    }
-
-    barrier.wait();
-
-    // Timed phase. Latency window: just before the first BEGIN of the txn to
-    // after its successful COMMIT, retries included. Integer microseconds.
-    let mut latencies: Vec<u64>;
-    let mut retries = 0u64;
-    if cfg.duration_s > 0 {
-        // Duration mode: run until the per-worker deadline, checked before
-        // starting each new transaction; a transaction in flight at the
-        // deadline (its retries included) runs to successful commit.
-        latencies = Vec::with_capacity(4096);
-        let start = Instant::now();
-        let duration = Duration::from_secs(cfg.duration_s);
-        while start.elapsed() < duration {
-            let t0 = Instant::now();
-            run_txn(&mut conn, &st, &mut rng, cfg, &mut sink, &mut retries)?;
-            latencies.push(t0.elapsed().as_micros() as u64);
-        }
-    } else {
-        // Events mode: exactly BENCH_TXNS_PER_THREAD timed transactions.
-        latencies = Vec::with_capacity(cfg.txns_per_thread as usize);
-        for _ in 0..cfg.txns_per_thread {
-            let t0 = Instant::now();
-            run_txn(&mut conn, &st, &mut rng, cfg, &mut sink, &mut retries)?;
-            latencies.push(t0.elapsed().as_micros() as u64);
-        }
-    }
-
-    std::hint::black_box(sink);
-    drop(conn);
-    Ok((latencies, retries))
+    Conn::new(opts)
 }
 
-fn worker(cfg: &Cfg, barrier: &Barrier, idx: u64) -> (Vec<u64>, u64) {
-    match worker_inner(cfg, barrier, idx) {
+type WorkerErr = Box<dyn std::error::Error>;
+
+/// Worker body. Connects, prepares, waits at the start barrier, then runs the
+/// timed workload. `slot` is this worker's progress counter (completed ops).
+/// Returns (per-operation latencies in µs, total completed operations).
+fn worker_inner(
+    cfg: &Cfg,
+    barrier: &Barrier,
+    idx: u64,
+    slot: &AtomicU64,
+) -> Result<(Vec<u64>, u64), WorkerErr> {
+    let mut conn = connect(cfg)?;
+    let mut rng = Lcg::new(cfg.seed + idx);
+
+    match cfg.workload {
+        1 => {
+            // ---- WL1: integer insert ----------------------------------------
+            // One prepared multi-row INSERT of BENCH_INT_BATCH rows, executed
+            // BENCH_INT_ROWS / BENCH_INT_BATCH times. Each bound value is a
+            // fresh next() cast to a signed 32-bit int. One latency sample per
+            // executed INSERT statement (the exec round trip). Autocommit ON:
+            // each INSERT is its own commit (no wrapping transaction) — SPEC
+            // requires this identical commit strategy in every language.
+            let batch = cfg.int_batch as usize;
+            let num_batches = cfg.int_rows / cfg.int_batch;
+            let placeholders = vec!["(?)"; batch].join(",");
+            let sql = format!("INSERT INTO bench_int (val) VALUES {}", placeholders);
+            let stmt = conn.prep(sql.as_str())?;
+
+            let mut latencies = Vec::with_capacity(num_batches as usize);
+            let mut done: u64 = 0;
+
+            barrier.wait();
+
+            for _ in 0..num_batches {
+                // Draw the batch values before timing: the sample measures the
+                // INSERT statement, not client-side value generation.
+                let mut vals: Vec<Value> = Vec::with_capacity(batch);
+                for _ in 0..batch {
+                    vals.push(Value::from(rng.next() as i32));
+                }
+                let t0 = Instant::now();
+                conn.exec_drop(&stmt, Params::Positional(vals))?;
+                latencies.push(t0.elapsed().as_micros() as u64);
+
+                done += cfg.int_batch;
+                slot.store(done, Ordering::Relaxed);
+            }
+
+            Ok((latencies, done))
+        }
+        2 => {
+            // ---- WL2: integer fetch + sum -----------------------------------
+            // SELECT val FROM bench_int LIMIT BENCH_INT_ROWS, fetch every row,
+            // sum val in a 64-bit accumulator fed to a black-box sink. One
+            // latency sample per worker for the whole scan.
+            let sql = format!("SELECT val FROM bench_int LIMIT {}", cfg.int_rows);
+            let stmt = conn.prep(sql.as_str())?;
+
+            barrier.wait();
+
+            let t0 = Instant::now();
+            let mut sum: i64 = 0;
+            let mut rows_read: u64 = 0;
+            let result = conn.exec_iter(&stmt, ())?;
+            for row in result {
+                let row = row?;
+                let v: i64 = row.get(0).ok_or("WL2: row missing column val")?;
+                sum = sum.wrapping_add(v);
+                rows_read += 1;
+                // Publish progress periodically (cheap relaxed store); the full
+                // scan is a single latency sample but the slot should advance.
+                if rows_read % 4096 == 0 {
+                    slot.store(rows_read, Ordering::Relaxed);
+                }
+            }
+            let sample = t0.elapsed().as_micros() as u64;
+            slot.store(rows_read, Ordering::Relaxed);
+            std::hint::black_box(sum);
+
+            Ok((vec![sample], rows_read))
+        }
+        3 => {
+            // ---- WL3: blob insert + MD5 -------------------------------------
+            // SPEC: content generation must NOT be a per-byte interpreted loop.
+            // Fill ONE BENCH_BLOB_SIZE buffer per worker ONCE with a fast bulk
+            // LCG fill (8 bytes per step via next().to_le_bytes()), then before
+            // each of BENCH_BLOB_COUNT blobs overwrite the first 8 bytes with
+            // the blob id so every blob's content (and MD5) differs. MD5 hashes
+            // the whole buffer each time; INSERT (id, data), id = idx*COUNT + k,
+            // autocommit ON (each INSERT its own commit). One latency sample per
+            // blob insert (the exec round trip; the id-stamp, MD5, and the owned
+            // copy for the driver are client-side, excluded from the sample but
+            // inside the timed window).
+            let stmt = conn.prep("INSERT INTO bench_blob (id, data) VALUES (?, ?)")?;
+            let size = cfg.blob_size as usize;
+
+            // One-time bulk fill (setup, before the start barrier).
+            let mut buf: Vec<u8> = vec![0u8; size];
+            let mut off = 0;
+            while off < size {
+                let bytes = rng.next().to_le_bytes(); // 8 bytes per LCG step
+                let take = (size - off).min(8);
+                buf[off..off + take].copy_from_slice(&bytes[..take]);
+                off += take;
+            }
+            let stamp = size.min(8); // guard tiny BENCH_BLOB_SIZE (< 8)
+
+            let mut latencies = Vec::with_capacity(cfg.blob_count as usize);
+            let mut done: u64 = 0;
+
+            barrier.wait();
+
+            for k in 0..cfg.blob_count {
+                let id = (idx * cfg.blob_count + k) as i64;
+                // Stamp the id into the first bytes: distinct content & MD5.
+                buf[..stamp].copy_from_slice(&id.to_le_bytes()[..stamp]);
+
+                let mut hasher = Md5::new();
+                hasher.update(&buf);
+                std::hint::black_box(hasher.finalize());
+
+                // Owned copy for the driver, built before timing (the buffer is
+                // reused across blobs, so it cannot be moved into the INSERT).
+                let data = buf.clone();
+                let t0 = Instant::now();
+                conn.exec_drop(&stmt, (id, data))?;
+                latencies.push(t0.elapsed().as_micros() as u64);
+
+                done += 1;
+                slot.store(done, Ordering::Relaxed);
+            }
+
+            Ok((latencies, done))
+        }
+        4 => {
+            // ---- WL4: blob read + MD5 ---------------------------------------
+            // Read this worker's own BENCH_BLOB_COUNT blobs by id range
+            // (SELECT data WHERE id = ?, ids idx*BLOB_COUNT + k) and MD5 each
+            // blob's content in app code (digest to a sink). One latency sample
+            // per blob read (the SELECT round trip; MD5 excluded from the
+            // sample, included in the timed window).
+            let stmt = conn.prep("SELECT data FROM bench_blob WHERE id = ?")?;
+
+            let mut latencies = Vec::with_capacity(cfg.blob_count as usize);
+            let mut done: u64 = 0;
+
+            barrier.wait();
+
+            for k in 0..cfg.blob_count {
+                let id = (idx * cfg.blob_count + k) as i64;
+                let t0 = Instant::now();
+                // 1-tuple FromRow is always implemented; a bare scalar FromRow
+                // is not guaranteed in mysql_common.
+                let (data,): (Vec<u8>,) = conn
+                    .exec_first(&stmt, (id,))?
+                    .ok_or("WL4: blob not found (did workload 3 run at this thread count?)")?;
+                latencies.push(t0.elapsed().as_micros() as u64);
+
+                let mut hasher = Md5::new();
+                hasher.update(&data);
+                std::hint::black_box(hasher.finalize());
+
+                done += 1;
+                slot.store(done, Ordering::Relaxed);
+            }
+
+            Ok((latencies, done))
+        }
+        w => Err(format!("invalid BENCH_WORKLOAD {} (must be 1..4)", w).into()),
+    }
+}
+
+fn worker(cfg: &Cfg, barrier: &Barrier, idx: u64, slot: &AtomicU64) -> (Vec<u64>, u64) {
+    match worker_inner(cfg, barrier, idx, slot) {
         Ok(res) => res,
         Err(e) => {
             eprintln!("error: worker {}: {}", idx, e);
             std::process::exit(1);
         }
+    }
+}
+
+/// Atomically overwrite the progress file with one partial JSON line
+/// (write FILE.tmp, then rename over FILE). Best-effort: write failures are
+/// warned about but do not abort an otherwise-valid run.
+fn write_progress(
+    path: &str,
+    workload: u8,
+    name: &str,
+    unit: &str,
+    threads: u64,
+    ops: u64,
+    elapsed_s: f64,
+) {
+    let throughput = if elapsed_s > 0.0 {
+        ops as f64 / elapsed_s
+    } else {
+        0.0
+    };
+    let line = format!(
+        "{{\"workload\":{},\"workload_name\":\"{}\",\"unit\":\"{}\",\"threads\":{},\
+\"ops\":{},\"elapsed_s\":{:.3},\"throughput\":{:.1},\"partial\":true}}\n",
+        workload, name, unit, threads, ops, elapsed_s, throughput
+    );
+    let tmp = format!("{}.tmp", path);
+    if let Err(e) = fs::write(&tmp, line.as_bytes()) {
+        eprintln!("warning: progress write {}: {}", tmp, e);
+        return;
+    }
+    if let Err(e) = fs::rename(&tmp, path) {
+        eprintln!("warning: progress rename {} -> {}: {}", tmp, path, e);
     }
 }
 
@@ -330,62 +351,141 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
         user,
         password,
         db,
-        table_rows: env_u64("BENCH_TABLE_ROWS")?,
+        workload: env_u64("BENCH_WORKLOAD")? as u8,
         threads: env_u64("BENCH_THREADS")?,
-        warmup_txns: env_u64("BENCH_WARMUP_TXNS")?,
-        txns_per_thread: env_u64("BENCH_TXNS_PER_THREAD")?,
-        duration_s: env_u64_or("BENCH_DURATION_S", 0)?,
-        range_size: env_u64_or("BENCH_RANGE_SIZE", 100)?,
         seed: env_u64("BENCH_SEED")?,
-        c_val: "abcdefghij".repeat(12),   // 120 chars
-        pad_val: "0123456789".repeat(6), // 60 chars
+        int_rows: env_u64_or("BENCH_INT_ROWS", 1_000_000)?,
+        int_batch: env_u64_or("BENCH_INT_BATCH", 10)?,
+        blob_count: env_u64_or("BENCH_BLOB_COUNT", 100)?,
+        blob_size: env_u64_or("BENCH_BLOB_SIZE", 1_048_576)?,
     };
 
-    if cfg.table_rows == 0 || cfg.threads == 0 || cfg.range_size == 0 {
-        return Err("BENCH_TABLE_ROWS, BENCH_THREADS and BENCH_RANGE_SIZE must be > 0".into());
+    if cfg.threads == 0 {
+        return Err("BENCH_THREADS must be > 0".into());
     }
-    // BENCH_TXNS_PER_THREAD is ignored in duration mode (BENCH_DURATION_S > 0).
-    if cfg.duration_s == 0 && cfg.txns_per_thread == 0 {
-        return Err("BENCH_TXNS_PER_THREAD must be > 0 in events mode".into());
+    let (name, unit, is_blob) = match cfg.workload {
+        1 => ("int-insert", "rows/s", false),
+        2 => ("int-scan", "rows/s", false),
+        3 => ("blob-insert", "blobs/s", true),
+        4 => ("blob-read", "blobs/s", true),
+        w => return Err(format!("invalid BENCH_WORKLOAD {} (must be 1..4)", w).into()),
+    };
+    // Per-workload validation so we never produce zero latency samples.
+    match cfg.workload {
+        1 => {
+            if cfg.int_batch == 0 {
+                return Err("BENCH_INT_BATCH must be > 0".into());
+            }
+            if cfg.int_rows / cfg.int_batch == 0 {
+                return Err("BENCH_INT_ROWS must be >= BENCH_INT_BATCH".into());
+            }
+        }
+        2 => {
+            if cfg.int_rows == 0 {
+                return Err("BENCH_INT_ROWS must be > 0".into());
+            }
+        }
+        3 | 4 => {
+            if cfg.blob_count == 0 {
+                return Err("BENCH_BLOB_COUNT must be > 0".into());
+            }
+            if cfg.blob_size == 0 {
+                return Err("BENCH_BLOB_SIZE must be > 0".into());
+            }
+        }
+        _ => unreachable!(),
     }
 
-    // Start barrier: all workers (after connect + prepare + warmup) plus the
-    // main thread. Main's wait() marks t_start.
+    // Progress checkpointing (optional).
+    let progress_path: Option<String> = match std::env::var("BENCH_PROGRESS_FILE") {
+        Ok(p) if !p.trim().is_empty() => Some(p),
+        _ => None,
+    };
+    let progress_sec = env_u64_or("BENCH_PROGRESS_SEC", 5)?.max(1);
+
+    // One progress slot per worker; each worker writes only its own slot.
+    let counters: Vec<AtomicU64> = (0..cfg.threads).map(|_| AtomicU64::new(0)).collect();
+
+    // Start barrier: every worker (after connect + prepare) plus main. The
+    // monitor does NOT wait on the barrier (it polls `started`).
     let barrier = Barrier::new(cfg.threads as usize + 1);
+    let started = AtomicBool::new(false);
+    let finished = AtomicBool::new(false);
 
-    let (mut latencies, total_retries, elapsed_s) = std::thread::scope(|s| {
+    let (mut latencies, total_ops, elapsed_s) = thread::scope(|s| {
+        let cfg_ref = &cfg;
+        let barrier_ref = &barrier;
+        let counters_ref = &counters;
+
+        // Worker threads.
         let handles: Vec<_> = (0..cfg.threads)
             .map(|i| {
-                let cfg = &cfg;
-                let barrier = &barrier;
-                s.spawn(move || worker(cfg, barrier, i))
+                s.spawn(move || worker(cfg_ref, barrier_ref, i, &counters_ref[i as usize]))
             })
             .collect();
 
-        barrier.wait();
+        // Monitor thread: samples the per-worker slots on a timer and writes
+        // the partial progress file. No-op when progress is disabled.
+        let started_ref = &started;
+        let finished_ref = &finished;
+        let progress_ref = &progress_path;
+        s.spawn(move || {
+            let path = match progress_ref {
+                Some(p) => p.as_str(),
+                None => return,
+            };
+            let tick = Duration::from_millis(100);
+            while !started_ref.load(Ordering::Acquire) {
+                if finished_ref.load(Ordering::Acquire) {
+                    return;
+                }
+                thread::sleep(tick);
+            }
+            // Use the monitor's own start instant for the partial elapsed; the
+            // sub-millisecond skew from main's t_start is irrelevant here
+            // ("slightly-stale counts are fine").
+            let mon_start = Instant::now();
+            let interval = Duration::from_secs(progress_sec);
+            let mut next = mon_start + interval;
+            while !finished_ref.load(Ordering::Acquire) {
+                let now = Instant::now();
+                if now >= next {
+                    let ops: u64 = counters_ref.iter().map(|c| c.load(Ordering::Relaxed)).sum();
+                    let elapsed = (now - mon_start).as_secs_f64();
+                    write_progress(path, cfg_ref.workload, name, unit, cfg_ref.threads, ops, elapsed);
+                    next += interval;
+                }
+                thread::sleep(tick);
+            }
+        });
+
+        // Release the barrier; sample t_start; signal the monitor.
+        barrier_ref.wait();
         let t_start = Instant::now();
+        started.store(true, Ordering::Release);
 
         let mut results = Vec::with_capacity(handles.len());
         for h in handles {
             match h.join() {
                 Ok(res) => results.push(res),
                 Err(_) => {
-                    // Worker panic message already went to stderr.
                     eprintln!("error: worker thread panicked");
                     std::process::exit(1);
                 }
             }
         }
         let elapsed_s = t_start.elapsed().as_secs_f64();
+        // Stop the monitor so the scope can join it.
+        finished.store(true, Ordering::Release);
 
         let total: usize = results.iter().map(|(lats, _)| lats.len()).sum();
         let mut merged: Vec<u64> = Vec::with_capacity(total);
-        let mut total_retries = 0u64;
-        for (lats, retries) in results {
+        let mut total_ops: u64 = 0;
+        for (lats, ops) in results {
             merged.extend_from_slice(&lats);
-            total_retries += retries;
+            total_ops += ops;
         }
-        (merged, total_retries, elapsed_s)
+        (merged, total_ops, elapsed_s)
     });
 
     latencies.sort_unstable();
@@ -397,37 +497,43 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
     let p99 = pct(99);
     let max_us = latencies[latencies.len() - 1];
 
-    // Duration mode: txns = total committed timed transactions across workers
-    // (one latency sample per committed timed transaction). Events mode:
-    // exactly BENCH_THREADS * BENCH_TXNS_PER_THREAD, as before.
-    let txns = if cfg.duration_s > 0 {
-        n
+    let throughput = total_ops as f64 / elapsed_s;
+    let mb_per_s = if is_blob {
+        format!("{:.1}", total_ops as f64 * cfg.blob_size as f64 / 1e6 / elapsed_s)
     } else {
-        cfg.threads * cfg.txns_per_thread
+        "0".to_string()
     };
-    let tps = txns as f64 / elapsed_s;
-    let qps = tps * 20.0; // 18 statements + BEGIN + COMMIT (sysbench counting)
 
     println!(
-        "{{\"lang\":\"rust\",\"driver\":\"mysql crate\",\"driver_version\":\"{}\",\
-\"runtime_version\":\"{}\",\"prepared\":true,\"client_host\":\"{}\",\"db_host\":\"{}\",\
-\"threads\":{},\"txns\":{},\"retries\":{},\"errors\":0,\"elapsed_s\":{:.3},\
-\"tps\":{:.1},\"qps\":{:.1},\"p50_us\":{},\"p95_us\":{},\"p99_us\":{},\"max_us\":{}}}",
+        "{{\"lang\":\"rust\",\"workload\":{},\"workload_name\":\"{}\",\"unit\":\"{}\",\
+\"driver\":\"mysql crate\",\"driver_version\":\"{}\",\"runtime_version\":\"{}\",\
+\"prepared\":true,\"client_host\":\"{}\",\"db_host\":\"{}\",\"threads\":{},\"ops\":{},\
+\"errors\":0,\"elapsed_s\":{:.3},\"throughput\":{:.1},\"mb_per_s\":{},\
+\"p50_us\":{},\"p95_us\":{},\"p99_us\":{},\"max_us\":{},\"client_cpu_s\":0,\"server_cpu_s\":0}}",
+        cfg.workload,
+        name,
+        unit,
         DRIVER_VERSION,
         env!("RUSTC_VERSION"),
         client_host(),
         cfg.host,
         cfg.threads,
-        txns,
-        total_retries,
+        total_ops,
         elapsed_s,
-        tps,
-        qps,
+        throughput,
+        mb_per_s,
         p50,
         p95,
         p99,
-        max_us
+        max_us,
     );
+
+    // Success: the stdout line supersedes the partial file — delete it.
+    if let Some(path) = &progress_path {
+        let _ = fs::remove_file(path);
+        let _ = fs::remove_file(format!("{}.tmp", path));
+    }
+
     Ok(())
 }
 

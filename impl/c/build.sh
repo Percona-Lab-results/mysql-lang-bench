@@ -8,4 +8,10 @@ if ! command -v mysql_config >/dev/null 2>&1; then
     exit 1
 fi
 
-cc bench.c -o bench $(mysql_config --cflags --libs) -O2 -pthread
+if ! printf '#include <openssl/md5.h>\nint main(void){return 0;}\n' \
+        | cc -x c - -lcrypto -o /dev/null >/dev/null 2>&1; then
+    echo "error: OpenSSL dev files (libcrypto) not found — install libssl-dev (Debian/Ubuntu) or openssl-devel (RHEL/Fedora)" >&2
+    exit 1
+fi
+
+cc bench.c -o bench $(mysql_config --cflags --libs) -lcrypto -O2 -pthread

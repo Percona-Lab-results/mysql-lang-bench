@@ -1,8 +1,8 @@
 {
   "name": "mysql-lang-bench-javascript",
-  "version": "2.0.0",
+  "version": "3.0.0",
   "private": true,
-  "description": "MySQL language benchmark - JavaScript (Node.js worker_threads + mysql2)",
+  "description": "MySQL language benchmark - JavaScript v3 four micro-workloads (Node.js worker_threads + mysql2)",
   "type": "module",
   "dependencies": {
     "mysql2": "^3.14.0"

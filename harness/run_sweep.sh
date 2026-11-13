@@ -21,7 +21,9 @@ SWEEP_ID="sweep-$(date +%Y%m%d-%H%M%S)-$(echo $LANGS | tr ' ' '+')"
 # as one job and the nohup runs in that job's foreground with the channel's
 # stdout/stderr still attached, so ssh waits for the whole sweep (this is what
 # serialized the hosts). Scoping the `&` inside a brace group fixes it.
+# BENCH_WORKLOAD_ENV optionally points remote_sweep at an alternate workload
+# env file (used for small validation runs); defaults to common/workload.env.
 # shellcheck disable=SC2086
 ssh -n $SSH_OPTS "$SSH_USER@$HOST" \
-    "cd $REMOTE_DIR && mkdir -p results && { nohup env BENCH_DURATION_OVERRIDE='${BENCH_DURATION_OVERRIDE:-}' bash harness/remote_sweep.sh $SWEEP_ID $LANGS </dev/null >/dev/null 2>&1 & }"
+    "cd $REMOTE_DIR && mkdir -p results && { nohup env BENCH_WORKLOAD_ENV='${BENCH_WORKLOAD_ENV:-}' bash harness/remote_sweep.sh $SWEEP_ID $LANGS </dev/null >/dev/null 2>&1 & }"
 echo "$HOST $SWEEP_ID"

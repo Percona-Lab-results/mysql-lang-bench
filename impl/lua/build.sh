@@ -1,6 +1,8 @@
 #!/usr/bin/env bash
 # Build step for the Lua implementation: nothing to compile, just verify that
-# LuaJIT and the libmysqlclient shared library are available.
+# LuaJIT and the shared libraries bench.lua loads (libmysqlclient for the DB
+# driver, libcrypto for MD5) are available via the same ffi.load fallback
+# chains the program uses.
 set -euo pipefail
 
 if ! command -v luajit >/dev/null 2>&1; then
@@ -8,7 +10,6 @@ if ! command -v luajit >/dev/null 2>&1; then
     exit 1
 fi
 
-# Probe the same ffi.load fallback chain bench.lua uses.
 if ! luajit -e '
 local ffi = require("ffi")
 local names = { "mysqlclient", "libmysqlclient.so.24",
@@ -18,6 +19,19 @@ for _, name in ipairs(names) do
 end
 os.exit(1)' >/dev/null 2>&1; then
     echo "libmysqlclient shared library not found: install the MySQL client library (e.g. apt install libmysqlclient-dev or libmysqlclient21)" >&2
+    exit 1
+fi
+
+if ! luajit -e '
+local ffi = require("ffi")
+ffi.cdef("unsigned char *MD5(const unsigned char *d, size_t n, unsigned char *md);")
+local names = { "crypto", "libcrypto.so.3", "libcrypto.so.1.1", "libcrypto.so" }
+for _, name in ipairs(names) do
+    local ok, lib = pcall(ffi.load, name)
+    if ok and pcall(function () return lib.MD5 end) then os.exit(0) end
+end
+os.exit(1)' >/dev/null 2>&1; then
+    echo "libcrypto (OpenSSL) with the MD5 symbol not found: install OpenSSL (e.g. apt install libssl-dev or libssl3)" >&2
     exit 1
 fi
 

@@ -1,14 +1,41 @@
 /*
- * mysql-lang-bench — C implementation (v2, multithreaded oltp_read_write).
- * libmysqlclient C API with mysql_stmt_* server-side prepared statements.
- * See SPEC.md: BENCH_THREADS pthread workers, each with its own connection,
- * its own 18 prepared statements and its own PRNG stream, run a
- * sysbench-oltp_read_write-style transaction loop. One JSON line on stdout.
+ * mysql-lang-bench — C implementation (v3, four micro-workloads).
+ *
+ * Follows SPEC.md v3 exactly: one of four workloads selected by BENCH_WORKLOAD
+ * (1..4), run by BENCH_THREADS concurrent pthread workers. Each worker owns its
+ * own MYSQL* connection (TCP, TLS disabled, autocommit ON), its own server-side
+ * prepared statement (mysql_stmt_*, so prepared=true), its own 31-bit LCG PRNG
+ * stream seeded BENCH_SEED + index, and its own per-operation latency array
+ * (integer microseconds). Workers connect and prepare, then wait at a start
+ * barrier; main releases the barrier, samples a monotonic clock, joins all
+ * workers, samples the clock again, and prints one JSON result line on stdout.
+ *
+ *   1 int-insert : BENCH_INT_ROWS rows via one prepared multi-row INSERT of
+ *                  BENCH_INT_BATCH rows, executed BENCH_INT_ROWS/BENCH_INT_BATCH
+ *                  times; one latency sample per INSERT.
+ *   2 int-read   : SELECT val FROM bench_int LIMIT BENCH_INT_ROWS, sum val into
+ *                  a 64-bit sink; one latency sample for the whole scan.
+ *   3 blob-insert: BENCH_BLOB_COUNT blobs of BENCH_BLOB_SIZE PRNG bytes, MD5
+ *                  each (hex digest into a sink), INSERT INTO bench_blob(id,data)
+ *                  with id = index*BENCH_BLOB_COUNT + k; one sample per insert.
+ *   4 blob-read  : read own BENCH_BLOB_COUNT blobs by id, MD5 each; one sample
+ *                  per read.
+ *
+ * Intermediate progress (SPEC "Intermediate progress"): when BENCH_PROGRESS_FILE
+ * is set, each worker publishes its completed-op count to a per-worker slot it
+ * alone writes (volatile long, single-writer). A monitor thread sums the slots
+ * every BENCH_PROGRESS_SEC seconds and atomically overwrites the progress file
+ * (write FILE.tmp, rename over FILE). The file is removed on success.
+ *
+ * Any SQL/connection error -> stderr + exit 1. No retries (these workloads have
+ * no concurrency conflicts).
  */
 
 #define _GNU_SOURCE
 
 #include <mysql.h>
+
+#include <openssl/md5.h>
 
 #include <inttypes.h>
 #include <pthread.h>
@@ -19,16 +46,6 @@
 #include <string.h>
 #include <time.h>
 #include <unistd.h>
-
-/* C_VAL = "abcdefghij" repeated 12 times (120 chars) */
-#define C_VAL \
-    "abcdefghij" "abcdefghij" "abcdefghij" "abcdefghij" \
-    "abcdefghij" "abcdefghij" "abcdefghij" "abcdefghij" \
-    "abcdefghij" "abcdefghij" "abcdefghij" "abcdefghij"
-/* PAD_VAL = "0123456789" repeated 6 times (60 chars) */
-#define PAD_VAL \
-    "0123456789" "0123456789" "0123456789" \
-    "0123456789" "0123456789" "0123456789"
 
 #if defined(__clang__)
 #define RUNTIME_VERSION "clang " __clang_version__
@@ -54,19 +71,12 @@ static void die_stmt(MYSQL_STMT *stmt, const char *what)
     exit(1);
 }
 
-/* Retryable concurrency errors per SPEC: deadlock, lock wait timeout,
- * duplicate key on the insert. */
-static bool err_retryable(unsigned int e)
-{
-    return e == 1213 || e == 1205 || e == 1062;
-}
-
 /* ---------------- env parsing -------------------------------------------- */
 
 static const char *env_str(const char *name)
 {
     const char *v = getenv(name);
-    if (v == NULL) {
+    if (v == NULL || v[0] == '\0') {
         fprintf(stderr, "missing required environment variable %s\n", name);
         exit(1);
     }
@@ -89,7 +99,7 @@ static long env_int(const char *name)
 static long env_int_opt(const char *name, long def)
 {
     const char *v = getenv(name);
-    if (v == NULL)
+    if (v == NULL || v[0] == '\0')
         return def;
     char *end = NULL;
     long n = strtol(v, &end, 10);
@@ -119,46 +129,59 @@ static int cmp_i64(const void *a, const void *b)
     return (x > y) - (x < y);
 }
 
-/* p(x) = arr[ceil(x/100 * n) - 1], arr sorted ascending, 0-based index */
+/* p(x) = arr[ceil(x/100 * n) - 1], arr sorted ascending, 0-based index. */
 static int64_t percentile(const int64_t *arr, long n, int x)
 {
     long idx = (long)(((int64_t)x * n + 99) / 100) - 1;
     if (idx < 0)
         idx = 0;
+    if (idx >= n)
+        idx = n - 1;
     return arr[idx];
+}
+
+/* ---------------- MD5 helper ---------------------------------------------- */
+
+/* Compute MD5 over buf, format the 32-char hex digest, and fold its bytes into
+ * a sink value so the app-side work cannot be optimized away. Returns the sink
+ * contribution. */
+static uint64_t md5_hex_sink(const unsigned char *buf, size_t len)
+{
+    unsigned char dg[MD5_DIGEST_LENGTH];
+    MD5(buf, len, dg);
+    static const char hx[] = "0123456789abcdef";
+    uint64_t s = 0;
+    for (int i = 0; i < MD5_DIGEST_LENGTH; i++) {
+        char hi = hx[dg[i] >> 4];
+        char lo = hx[dg[i] & 0x0F];
+        s += (unsigned char)hi + (unsigned char)lo;
+    }
+    return s;
 }
 
 /* ---------------- shared, read-only workload config ----------------------- */
 
 static const char *cfg_host, *cfg_user, *cfg_password, *cfg_db;
 static long cfg_port;
-static long table_rows, n_threads, warmup_txns, txns_per_thread, range_size;
-static long base_seed;
-static long duration_s; /* 0 = events mode, > 0 = fixed-duration mode */
+static long n_threads, base_seed;
+static long int_rows, int_batch, blob_count, blob_size;
+static int workload;
+static const char *workload_name;
+static const char *unit;
 
 static pthread_barrier_t start_barrier;
 
-/* Constant string parameters, read-only after init — safe to share. */
-static char c_val[] = C_VAL;
-static char pad_val[] = PAD_VAL;
-static unsigned long c_val_len = sizeof(c_val) - 1;     /* 120 */
-static unsigned long pad_val_len = sizeof(pad_val) - 1; /* 60 */
+/* Progress checkpointing. */
+static const char *progress_file;  /* NULL/empty => disabled */
+static long progress_sec;
+static volatile long *progress;    /* per-worker slots, or NULL */
+static int64_t t_start_ns;         /* set by main after barrier release */
+static volatile int monitor_stop;
+
+/* Black-box sink so MD5/sum work is not dead-code-eliminated. */
+static volatile uint64_t g_sink;
 
 /* ---------------- per-worker state ---------------------------------------- */
-
-/* The 18 server-side prepared statements, one set per worker. */
-enum {
-    ST_POINT0 = 0,          /* 10 point selects: ST_POINT0 .. ST_POINT0+9 */
-    ST_RANGE_SIMPLE = 10,
-    ST_RANGE_SUM = 11,
-    ST_RANGE_ORDER = 12,
-    ST_RANGE_DISTINCT = 13,
-    ST_UPD_INDEX = 14,
-    ST_UPD_NONINDEX = 15,
-    ST_DELETE = 16,
-    ST_INSERT = 17,
-    ST_COUNT = 18
-};
 
 typedef struct worker {
     pthread_t tid;
@@ -167,57 +190,36 @@ typedef struct worker {
     int64_t prng_state;
 
     MYSQL *conn;
-    MYSQL_STMT *st[ST_COUNT];
+    MYSQL_STMT *st;
 
-    /* Parameter value buffers (bound once; values written before execute). */
-    unsigned int point_id[10];
-    unsigned int range_lo[4], range_hi[4]; /* simple, sum, order, distinct */
-    unsigned int upd_index_id;
-    unsigned int upd_nonindex_id;
-    unsigned int del_id;
-    unsigned int ins_id, ins_k;
+    MYSQL_BIND *pbind;      /* parameter binds (dynamic count per workload) */
+    MYSQL_BIND rbind[1];    /* result bind */
 
-    /* Result buffers. One worker runs its statements strictly sequentially,
-     * so the selects returning column c can share one row buffer. */
-    char row_c[512]; /* CHAR(120); up to 480 bytes as utf8mb4 */
-    unsigned long row_c_len;
-    char sum_buf[80]; /* SUM(k) over INT UNSIGNED arrives as DECIMAL text */
-    unsigned long sum_len;
-    bool sum_is_null;
+    int32_t *ivals;         /* WL1: BENCH_INT_BATCH bound int values */
+    int32_t ival;           /* WL2: fetched val */
+    unsigned char *blob;    /* WL3/4: BENCH_BLOB_SIZE byte buffer */
+    long long blob_id;      /* WL3/4: bound/looked-up id (BIGINT) */
+    unsigned long blob_len; /* WL3: param length; WL4: fetched length */
 
-    /* MYSQL_BIND arrays kept alive for the worker's whole lifetime. */
-    MYSQL_BIND bp_point[10][1];
-    MYSQL_BIND br_point[10][1];
-    MYSQL_BIND bp_range[4][2];
-    MYSQL_BIND br_range_c[3][1]; /* simple, order, distinct */
-    MYSQL_BIND br_sum[1];
-    MYSQL_BIND bp_upd_index[1];
-    MYSQL_BIND bp_upd_nonindex[2];
-    MYSQL_BIND bp_del[1];
-    MYSQL_BIND bp_ins[4];
+    int64_t *lat;
+    long lat_cap;
+    long lat_count;
 
-    int64_t *lat;    /* events mode: BENCH_TXNS_PER_THREAD entries, pre-
-                        allocated; duration mode: grows by doubling */
-    long lat_cap;    /* allocated entries */
-    long lat_count;  /* committed timed transactions recorded */
-    int64_t retries;
+    uint64_t sink;          /* per-worker accumulation of consumed values */
+
+    volatile long *slot;    /* progress slot (completed ops) or NULL */
 } worker;
 
 /* ---------------- PRNG: 31-bit LCG, identical in every language ----------- */
 
 static int64_t prng_next(worker *w)
 {
-    /* (state * 1103515245 + 12345) mod 2^31; product fits in int64 */
+    /* (state * 1103515245 + 12345) mod 2^31; product fits in int64. */
     w->prng_state = (w->prng_state * 1103515245 + 12345) & 0x7fffffffLL;
     return w->prng_state;
 }
 
-static int64_t prng_rand(worker *w, int64_t n) /* uniform 0..n-1 */
-{
-    return prng_next(w) % n;
-}
-
-/* ---------------- per-worker setup ----------------------------------------- */
+/* ---------------- connection / statement setup ---------------------------- */
 
 static MYSQL_STMT *prepare_stmt(MYSQL *conn, const char *sql)
 {
@@ -227,14 +229,6 @@ static MYSQL_STMT *prepare_stmt(MYSQL *conn, const char *sql)
     if (mysql_stmt_prepare(stmt, sql, (unsigned long)strlen(sql)))
         die_stmt(stmt, "mysql_stmt_prepare");
     return stmt;
-}
-
-static void bind_uint_param(MYSQL_BIND *b, unsigned int *value)
-{
-    memset(b, 0, sizeof(*b));
-    b->buffer_type = MYSQL_TYPE_LONG;
-    b->buffer = value;
-    b->is_unsigned = 1;
 }
 
 static void worker_connect(worker *w)
@@ -260,329 +254,340 @@ static void worker_connect(worker *w)
         die_mysql(w->conn, "mysql_autocommit");
 }
 
-static void worker_prepare(worker *w)
+/* ---------------- per-workload prepare ------------------------------------ */
+
+static void prepare_wl1(worker *w)
 {
-    MYSQL *conn = w->conn;
-
-    /* 10 point selects, each its own prepared statement (sysbench-style). */
-    for (int j = 0; j < 10; j++) {
-        w->st[ST_POINT0 + j] =
-            prepare_stmt(conn, "SELECT c FROM sbtest WHERE id = ?");
-        bind_uint_param(&w->bp_point[j][0], &w->point_id[j]);
-        if (mysql_stmt_bind_param(w->st[ST_POINT0 + j], w->bp_point[j]))
-            die_stmt(w->st[ST_POINT0 + j], "mysql_stmt_bind_param(point)");
-
-        memset(w->br_point[j], 0, sizeof(w->br_point[j]));
-        w->br_point[j][0].buffer_type = MYSQL_TYPE_STRING;
-        w->br_point[j][0].buffer = w->row_c;
-        w->br_point[j][0].buffer_length = sizeof(w->row_c);
-        w->br_point[j][0].length = &w->row_c_len;
-        if (mysql_stmt_bind_result(w->st[ST_POINT0 + j], w->br_point[j]))
-            die_stmt(w->st[ST_POINT0 + j], "mysql_stmt_bind_result(point)");
+    /* One prepared multi-row INSERT of BENCH_INT_BATCH rows. */
+    size_t cap = 64 + (size_t)int_batch * 5;
+    char *sql = malloc(cap);
+    if (sql == NULL) {
+        fprintf(stderr, "out of memory building WL1 SQL\n");
+        exit(1);
     }
+    int off = snprintf(sql, cap, "INSERT INTO bench_int (val) VALUES ");
+    for (long j = 0; j < int_batch; j++)
+        off += snprintf(sql + off, cap - (size_t)off, "%s(?)", j ? "," : "");
+    w->st = prepare_stmt(w->conn, sql);
+    free(sql);
 
-    /* 4 range selects: params (lo, hi) each. */
-    static const char *range_sql[4] = {
-        "SELECT c FROM sbtest WHERE id BETWEEN ? AND ?",
-        "SELECT SUM(k) FROM sbtest WHERE id BETWEEN ? AND ?",
-        "SELECT c FROM sbtest WHERE id BETWEEN ? AND ? ORDER BY c",
-        "SELECT DISTINCT c FROM sbtest WHERE id BETWEEN ? AND ? ORDER BY c",
-    };
-    for (int j = 0; j < 4; j++) {
-        MYSQL_STMT *st = prepare_stmt(conn, range_sql[j]);
-        w->st[ST_RANGE_SIMPLE + j] = st;
-        bind_uint_param(&w->bp_range[j][0], &w->range_lo[j]);
-        bind_uint_param(&w->bp_range[j][1], &w->range_hi[j]);
-        if (mysql_stmt_bind_param(st, w->bp_range[j]))
-            die_stmt(st, "mysql_stmt_bind_param(range)");
+    w->ivals = malloc((size_t)int_batch * sizeof(int32_t));
+    w->pbind = calloc((size_t)int_batch, sizeof(MYSQL_BIND));
+    if (w->ivals == NULL || w->pbind == NULL) {
+        fprintf(stderr, "out of memory allocating WL1 buffers\n");
+        exit(1);
     }
-
-    /* Result binds: column c for simple/order/distinct (shared row buffer). */
-    {
-        const int c_stmts[3] = { ST_RANGE_SIMPLE, ST_RANGE_ORDER,
-                                 ST_RANGE_DISTINCT };
-        for (int j = 0; j < 3; j++) {
-            memset(w->br_range_c[j], 0, sizeof(w->br_range_c[j]));
-            w->br_range_c[j][0].buffer_type = MYSQL_TYPE_STRING;
-            w->br_range_c[j][0].buffer = w->row_c;
-            w->br_range_c[j][0].buffer_length = sizeof(w->row_c);
-            w->br_range_c[j][0].length = &w->row_c_len;
-            if (mysql_stmt_bind_result(w->st[c_stmts[j]], w->br_range_c[j]))
-                die_stmt(w->st[c_stmts[j]], "mysql_stmt_bind_result(range)");
-        }
+    for (long j = 0; j < int_batch; j++) {
+        w->pbind[j].buffer_type = MYSQL_TYPE_LONG; /* signed 32-bit */
+        w->pbind[j].buffer = &w->ivals[j];
+        w->pbind[j].is_unsigned = 0;
     }
-
-    /* SUM(k) over INT UNSIGNED yields DECIMAL; fetch it as a string buffer.
-       It is NULL when the range matches no rows (rows may be deleted by
-       concurrent workers), so bind is_null too. */
-    memset(w->br_sum, 0, sizeof(w->br_sum));
-    w->br_sum[0].buffer_type = MYSQL_TYPE_NEWDECIMAL;
-    w->br_sum[0].buffer = w->sum_buf;
-    w->br_sum[0].buffer_length = sizeof(w->sum_buf);
-    w->br_sum[0].length = &w->sum_len;
-    w->br_sum[0].is_null = &w->sum_is_null;
-    if (mysql_stmt_bind_result(w->st[ST_RANGE_SUM], w->br_sum))
-        die_stmt(w->st[ST_RANGE_SUM], "mysql_stmt_bind_result(sum)");
-
-    /* Index update. */
-    w->st[ST_UPD_INDEX] =
-        prepare_stmt(conn, "UPDATE sbtest SET k = k + 1 WHERE id = ?");
-    bind_uint_param(&w->bp_upd_index[0], &w->upd_index_id);
-    if (mysql_stmt_bind_param(w->st[ST_UPD_INDEX], w->bp_upd_index))
-        die_stmt(w->st[ST_UPD_INDEX], "mysql_stmt_bind_param(upd_index)");
-
-    /* Non-index update: params (c, id). */
-    w->st[ST_UPD_NONINDEX] =
-        prepare_stmt(conn, "UPDATE sbtest SET c = ? WHERE id = ?");
-    memset(w->bp_upd_nonindex, 0, sizeof(w->bp_upd_nonindex));
-    w->bp_upd_nonindex[0].buffer_type = MYSQL_TYPE_STRING;
-    w->bp_upd_nonindex[0].buffer = c_val;
-    w->bp_upd_nonindex[0].buffer_length = c_val_len;
-    w->bp_upd_nonindex[0].length = &c_val_len;
-    bind_uint_param(&w->bp_upd_nonindex[1], &w->upd_nonindex_id);
-    if (mysql_stmt_bind_param(w->st[ST_UPD_NONINDEX], w->bp_upd_nonindex))
-        die_stmt(w->st[ST_UPD_NONINDEX], "mysql_stmt_bind_param(upd_nonindex)");
-
-    /* Delete. */
-    w->st[ST_DELETE] = prepare_stmt(conn, "DELETE FROM sbtest WHERE id = ?");
-    bind_uint_param(&w->bp_del[0], &w->del_id);
-    if (mysql_stmt_bind_param(w->st[ST_DELETE], w->bp_del))
-        die_stmt(w->st[ST_DELETE], "mysql_stmt_bind_param(delete)");
-
-    /* Insert: params (id, k, c, pad). */
-    w->st[ST_INSERT] = prepare_stmt(
-        conn, "INSERT INTO sbtest (id, k, c, pad) VALUES (?, ?, ?, ?)");
-    memset(w->bp_ins, 0, sizeof(w->bp_ins));
-    bind_uint_param(&w->bp_ins[0], &w->ins_id);
-    bind_uint_param(&w->bp_ins[1], &w->ins_k);
-    w->bp_ins[2].buffer_type = MYSQL_TYPE_STRING;
-    w->bp_ins[2].buffer = c_val;
-    w->bp_ins[2].buffer_length = c_val_len;
-    w->bp_ins[2].length = &c_val_len;
-    w->bp_ins[3].buffer_type = MYSQL_TYPE_STRING;
-    w->bp_ins[3].buffer = pad_val;
-    w->bp_ins[3].buffer_length = pad_val_len;
-    w->bp_ins[3].length = &pad_val_len;
-    if (mysql_stmt_bind_param(w->st[ST_INSERT], w->bp_ins))
-        die_stmt(w->st[ST_INSERT], "mysql_stmt_bind_param(insert)");
+    if (mysql_stmt_bind_param(w->st, w->pbind))
+        die_stmt(w->st, "mysql_stmt_bind_param(wl1)");
 }
 
-/* ---------------- transaction execution ------------------------------------ */
-
-/* Returns 0 on success, 1 on a retryable concurrency error; dies otherwise. */
-static int exec_dml(MYSQL_STMT *st, const char *what)
+static void prepare_wl2(worker *w)
 {
-    if (mysql_stmt_execute(st)) {
-        unsigned int e = mysql_stmt_errno(st);
-        if (err_retryable(e))
-            return 1;
-        die_stmt(st, what);
-    }
-    return 0;
+    char sql[128];
+    snprintf(sql, sizeof(sql), "SELECT val FROM bench_int LIMIT %ld", int_rows);
+    w->st = prepare_stmt(w->conn, sql);
+
+    memset(w->rbind, 0, sizeof(w->rbind));
+    w->rbind[0].buffer_type = MYSQL_TYPE_LONG; /* signed INT */
+    w->rbind[0].buffer = &w->ival;
+    w->rbind[0].is_unsigned = 0;
+    if (mysql_stmt_bind_result(w->st, w->rbind))
+        die_stmt(w->st, "mysql_stmt_bind_result(wl2)");
 }
 
-/* Execute a SELECT and fetch all rows to MYSQL_NO_DATA.
-   Returns 0 on success, 1 on a retryable concurrency error; dies otherwise. */
-static int exec_select(MYSQL_STMT *st, const char *what)
+static void prepare_wl3(worker *w)
 {
-    if (mysql_stmt_execute(st)) {
-        unsigned int e = mysql_stmt_errno(st);
-        if (err_retryable(e))
-            return 1;
-        die_stmt(st, what);
+    w->blob = malloc((size_t)blob_size);
+    w->pbind = calloc(2, sizeof(MYSQL_BIND));
+    if (w->blob == NULL || w->pbind == NULL) {
+        fprintf(stderr, "out of memory allocating WL3 buffers\n");
+        exit(1);
     }
-    for (;;) {
-        int rc = mysql_stmt_fetch(st);
-        if (rc == 0 || rc == MYSQL_DATA_TRUNCATED)
-            continue; /* row consumed */
-        if (rc == MYSQL_NO_DATA)
-            return 0;
-        /* rc == 1: error */
-        {
-            unsigned int e = mysql_stmt_errno(st);
-            if (err_retryable(e))
-                return 1;
-            die_stmt(st, what);
-        }
-    }
+    w->blob_len = (unsigned long)blob_size;
+
+    w->st = prepare_stmt(w->conn,
+                         "INSERT INTO bench_blob (id, data) VALUES (?, ?)");
+    w->pbind[0].buffer_type = MYSQL_TYPE_LONGLONG; /* id BIGINT */
+    w->pbind[0].buffer = &w->blob_id;
+    w->pbind[0].is_unsigned = 0;
+    w->pbind[1].buffer_type = MYSQL_TYPE_LONG_BLOB; /* data LONGBLOB */
+    w->pbind[1].buffer = w->blob;
+    w->pbind[1].buffer_length = (unsigned long)blob_size;
+    w->pbind[1].length = &w->blob_len;
+    if (mysql_stmt_bind_param(w->st, w->pbind))
+        die_stmt(w->st, "mysql_stmt_bind_param(wl3)");
 }
 
-/* One attempt at the transaction body (the 18 inner statements).
-   Values are drawn immediately before each statement executes, so a retry
-   naturally redraws everything (the PRNG stream continues).
-   Returns 0 on success, 1 if the attempt must be retried; dies otherwise. */
-static int txn_body(worker *w)
+static void prepare_wl4(worker *w)
 {
-    /* 10 point selects */
-    for (int j = 0; j < 10; j++) {
-        w->point_id[j] = (unsigned int)(1 + prng_rand(w, table_rows));
-        if (exec_select(w->st[ST_POINT0 + j], "point SELECT"))
-            return 1;
+    w->blob = malloc((size_t)blob_size);
+    w->pbind = calloc(1, sizeof(MYSQL_BIND));
+    if (w->blob == NULL || w->pbind == NULL) {
+        fprintf(stderr, "out of memory allocating WL4 buffers\n");
+        exit(1);
     }
 
-    /* 4 range selects: simple, sum, order, distinct */
-    static const char *range_what[4] = {
-        "simple range SELECT", "sum range SELECT",
-        "order range SELECT", "distinct range SELECT"
-    };
-    for (int j = 0; j < 4; j++) {
-        unsigned int lo = (unsigned int)(1 + prng_rand(w, table_rows));
-        w->range_lo[j] = lo;
-        w->range_hi[j] = lo + (unsigned int)range_size - 1;
-        if (exec_select(w->st[ST_RANGE_SIMPLE + j], range_what[j]))
-            return 1;
-    }
+    w->st = prepare_stmt(w->conn, "SELECT data FROM bench_blob WHERE id = ?");
+    w->pbind[0].buffer_type = MYSQL_TYPE_LONGLONG; /* id BIGINT */
+    w->pbind[0].buffer = &w->blob_id;
+    w->pbind[0].is_unsigned = 0;
+    if (mysql_stmt_bind_param(w->st, w->pbind))
+        die_stmt(w->st, "mysql_stmt_bind_param(wl4)");
 
-    /* index update */
-    w->upd_index_id = (unsigned int)(1 + prng_rand(w, table_rows));
-    if (exec_dml(w->st[ST_UPD_INDEX], "index UPDATE"))
-        return 1;
-
-    /* non-index update */
-    w->upd_nonindex_id = (unsigned int)(1 + prng_rand(w, table_rows));
-    if (exec_dml(w->st[ST_UPD_NONINDEX], "non-index UPDATE"))
-        return 1;
-
-    /* delete + insert (same id; k drawn with it, before the DELETE) */
-    {
-        unsigned int id = (unsigned int)(1 + prng_rand(w, table_rows));
-        unsigned int k = (unsigned int)prng_rand(w, table_rows);
-        w->del_id = id;
-        if (exec_dml(w->st[ST_DELETE], "DELETE"))
-            return 1;
-        w->ins_id = id;
-        w->ins_k = k;
-        if (exec_dml(w->st[ST_INSERT], "INSERT"))
-            return 1;
-    }
-
-    return 0;
+    memset(w->rbind, 0, sizeof(w->rbind));
+    w->rbind[0].buffer_type = MYSQL_TYPE_LONG_BLOB; /* data LONGBLOB */
+    w->rbind[0].buffer = w->blob;
+    w->rbind[0].buffer_length = (unsigned long)blob_size;
+    w->rbind[0].length = &w->blob_len;
+    if (mysql_stmt_bind_result(w->st, w->rbind))
+        die_stmt(w->st, "mysql_stmt_bind_result(wl4)");
 }
 
-/* Run one full transaction until it commits. Retryable errors (1213/1205/1062)
-   anywhere in it — including BEGIN/COMMIT — roll back, bump retries, redraw
-   and rerun. */
-static void run_txn(worker *w)
-{
-    for (;;) {
-        if (mysql_query(w->conn, "BEGIN")) {
-            unsigned int e = mysql_errno(w->conn);
-            if (!err_retryable(e))
-                die_mysql(w->conn, "BEGIN");
-            (void)mysql_query(w->conn, "ROLLBACK"); /* ignore result */
-            w->retries++;
-            continue;
-        }
-        if (txn_body(w)) {
-            (void)mysql_query(w->conn, "ROLLBACK"); /* ignore result */
-            w->retries++;
-            continue;
-        }
-        if (mysql_query(w->conn, "COMMIT")) {
-            unsigned int e = mysql_errno(w->conn);
-            if (!err_retryable(e))
-                die_mysql(w->conn, "COMMIT");
-            (void)mysql_query(w->conn, "ROLLBACK"); /* ignore result */
-            w->retries++;
-            continue;
-        }
-        return;
-    }
-}
+/* ---------------- latency recording --------------------------------------- */
 
-/* Append one latency sample; in duration mode the array grows by doubling
-   (events mode pre-allocates exactly and never hits the capacity). */
 static void record_lat(worker *w, int64_t us)
 {
-    if (w->lat_count == w->lat_cap) {
-        long new_cap = w->lat_cap * 2;
-        int64_t *p = realloc(w->lat, (size_t)new_cap * sizeof(int64_t));
-        if (p == NULL) {
-            fprintf(stderr, "failed to grow latency array (%ld entries)\n",
-                    new_cap);
-            exit(1);
-        }
-        w->lat = p;
-        w->lat_cap = new_cap;
+    if (w->lat_count >= w->lat_cap) {
+        /* Capacities are sized exactly per workload; this should never fire. */
+        fprintf(stderr, "latency array overflow (cap %ld)\n", w->lat_cap);
+        exit(1);
     }
     w->lat[w->lat_count++] = us;
 }
 
-/* ---------------- worker thread -------------------------------------------- */
+/* ---------------- per-workload run ---------------------------------------- */
+
+static void run_wl1(worker *w)
+{
+    long execs = int_rows / int_batch;
+    long done = 0;
+    for (long e = 0; e < execs; e++) {
+        for (long j = 0; j < int_batch; j++)
+            w->ivals[j] = (int32_t)prng_next(w);
+        int64_t t0 = now_ns();
+        if (mysql_stmt_execute(w->st))
+            die_stmt(w->st, "INSERT (wl1)");
+        record_lat(w, (now_ns() - t0) / 1000);
+        done += int_batch;
+        if (w->slot)
+            *w->slot = done; /* rows completed; published every batch */
+    }
+}
+
+static void run_wl2(worker *w)
+{
+    int64_t t0 = now_ns();
+    if (mysql_stmt_execute(w->st))
+        die_stmt(w->st, "SELECT (wl2)");
+    int64_t sum = 0;
+    long rows = 0;
+    for (;;) {
+        int rc = mysql_stmt_fetch(w->st);
+        if (rc == MYSQL_NO_DATA)
+            break;
+        if (rc == 1)
+            die_stmt(w->st, "mysql_stmt_fetch (wl2)");
+        /* rc == 0 or MYSQL_DATA_TRUNCATED: row consumed */
+        sum += w->ival;
+        rows++;
+        if (w->slot && (rows & 0xFFFF) == 0)
+            *w->slot = rows;
+    }
+    record_lat(w, (now_ns() - t0) / 1000); /* one sample for the whole scan */
+    w->sink += (uint64_t)sum;
+    if (w->slot)
+        *w->slot = rows;
+}
+
+static void run_wl3(worker *w)
+{
+    /* Generate the BENCH_BLOB_SIZE buffer ONCE per worker with a bulk LCG fill
+       (8 bytes written per LCG step in compiled code — NOT a per-byte loop, so
+       this measures MD5/DB throughput, not loop speed). Before each blob insert
+       the first 8 bytes are overwritten with the blob id, so every blob's
+       content and MD5 differ. Per SPEC the content need not match across
+       languages. */
+    long nchunks = blob_size / 8;
+    uint64_t *p64 = (uint64_t *)w->blob;
+    for (long c = 0; c < nchunks; c++)
+        p64[c] = (uint64_t)prng_next(w) * 1103515245ULL + 12345ULL;
+    for (long j = nchunks * 8; j < blob_size; j++)
+        w->blob[j] = (unsigned char)(prng_next(w) & 0xFF);
+
+    w->blob_len = (unsigned long)blob_size;
+    for (long k = 0; k < blob_count; k++) {
+        w->blob_id = (long long)w->index * blob_count + k;
+        if (blob_size >= 8)
+            memcpy(w->blob, &w->blob_id, 8); /* vary content per blob */
+        w->sink += md5_hex_sink(w->blob, (size_t)blob_size);
+        int64_t t0 = now_ns();
+        if (mysql_stmt_execute(w->st))
+            die_stmt(w->st, "INSERT (wl3)");
+        record_lat(w, (now_ns() - t0) / 1000); /* per blob insert */
+        if (w->slot)
+            *w->slot = k + 1;
+    }
+}
+
+static void run_wl4(worker *w)
+{
+    for (long k = 0; k < blob_count; k++) {
+        w->blob_id = (long long)w->index * blob_count + k;
+        w->blob_len = 0;
+        int64_t t0 = now_ns();
+        if (mysql_stmt_execute(w->st))
+            die_stmt(w->st, "SELECT (wl4)");
+        int rc = mysql_stmt_fetch(w->st);
+        if (rc == 1)
+            die_stmt(w->st, "mysql_stmt_fetch (wl4)");
+        if (rc == MYSQL_NO_DATA) {
+            fprintf(stderr, "blob id %lld not found\n", w->blob_id);
+            exit(1);
+        }
+        unsigned long got = w->blob_len; /* full content length */
+        /* Drain the (single-row) result so the statement can re-execute. */
+        while ((rc = mysql_stmt_fetch(w->st)) == 0 || rc == MYSQL_DATA_TRUNCATED)
+            ;
+        if (rc == 1)
+            die_stmt(w->st, "mysql_stmt_fetch drain (wl4)");
+        record_lat(w, (now_ns() - t0) / 1000); /* per blob read */
+        w->sink += md5_hex_sink(w->blob, (size_t)got);
+        if (w->slot)
+            *w->slot = k + 1;
+    }
+}
+
+/* ---------------- worker thread ------------------------------------------- */
 
 static void *worker_main(void *arg)
 {
     worker *w = (worker *)arg;
 
+    mysql_thread_init();
     worker_connect(w);
-    worker_prepare(w);
 
-    /* Warmup: executed, same PRNG stream, not timed. */
-    for (long i = 0; i < warmup_txns; i++)
-        run_txn(w);
-    /* Reported retries cover only the timed window (all impls agree). */
-    w->retries = 0;
-
-    /* Wait for all workers (and main) at the start barrier. */
-    pthread_barrier_wait(&start_barrier);
-
-    /* Timed loop: per-transaction latency in integer microseconds, from just
-       before the first BEGIN attempt to after the successful COMMIT. */
-    if (duration_s > 0) {
-        /* Duration mode: each worker samples its own clock and runs until
-           start + BENCH_DURATION_S, checking the deadline before each new
-           transaction; one in flight at the deadline runs to commit. */
-        int64_t deadline = now_ns() + duration_s * 1000000000LL;
-        for (;;) {
-            int64_t t0 = now_ns();
-            if (t0 >= deadline)
-                break;
-            run_txn(w);
-            record_lat(w, (now_ns() - t0) / 1000);
-        }
-    } else {
-        for (long i = 0; i < txns_per_thread; i++) {
-            int64_t t0 = now_ns();
-            run_txn(w);
-            record_lat(w, (now_ns() - t0) / 1000);
-        }
+    switch (workload) {
+    case 1: prepare_wl1(w); break;
+    case 2: prepare_wl2(w); break;
+    case 3: prepare_wl3(w); break;
+    case 4: prepare_wl4(w); break;
     }
 
-    for (int j = 0; j < ST_COUNT; j++)
-        mysql_stmt_close(w->st[j]);
+    pthread_barrier_wait(&start_barrier);
+
+    switch (workload) {
+    case 1: run_wl1(w); break;
+    case 2: run_wl2(w); break;
+    case 3: run_wl3(w); break;
+    case 4: run_wl4(w); break;
+    }
+
+    mysql_stmt_close(w->st);
     mysql_close(w->conn);
     mysql_thread_end();
+
+    free(w->pbind);
+    free(w->ivals);
+    free(w->blob);
     return NULL;
 }
 
-/* ---------------- main ----------------------------------------------------- */
+/* ---------------- progress monitor ---------------------------------------- */
+
+static void write_progress(int64_t ops, double elapsed)
+{
+    double throughput = elapsed > 0 ? (double)ops / elapsed : 0.0;
+
+    size_t tcap = strlen(progress_file) + 5;
+    char *tmp = malloc(tcap);
+    if (tmp == NULL)
+        return; /* best-effort */
+    snprintf(tmp, tcap, "%s.tmp", progress_file);
+
+    FILE *f = fopen(tmp, "w");
+    if (f == NULL) {
+        free(tmp);
+        return;
+    }
+    fprintf(f,
+            "{\"workload\":%d,\"workload_name\":\"%s\",\"unit\":\"%s\","
+            "\"threads\":%ld,\"ops\":%" PRId64 ",\"elapsed_s\":%.3f,"
+            "\"throughput\":%.1f,\"partial\":true}\n",
+            workload, workload_name, unit, n_threads, ops, elapsed, throughput);
+    if (fclose(f) != 0) {
+        free(tmp);
+        return;
+    }
+    (void)rename(tmp, progress_file); /* atomic overwrite; best-effort */
+    free(tmp);
+}
+
+static void *monitor_main(void *arg)
+{
+    worker *workers = (worker *)arg;
+    for (;;) {
+        /* Sleep up to progress_sec, waking promptly on stop. */
+        for (long ms = 0; ms < progress_sec * 1000 && !monitor_stop; ms += 100) {
+            struct timespec req = { .tv_sec = 0, .tv_nsec = 100 * 1000000L };
+            nanosleep(&req, NULL);
+        }
+        if (monitor_stop)
+            break;
+        int64_t ops = 0;
+        for (long i = 0; i < n_threads; i++)
+            ops += progress[i];
+        double elapsed = (double)(now_ns() - t_start_ns) / 1e9;
+        write_progress(ops, elapsed);
+    }
+    (void)workers;
+    return NULL;
+}
+
+/* ---------------- main ---------------------------------------------------- */
 
 int main(void)
 {
-    /* Connection config */
     cfg_host = env_str("MYSQL_HOST");
     cfg_port = env_int("MYSQL_PORT");
     cfg_user = env_str("MYSQL_USER");
     cfg_password = env_str("MYSQL_PASSWORD");
     cfg_db = env_str("MYSQL_DB");
 
-    /* Workload config */
-    table_rows = env_int("BENCH_TABLE_ROWS");
+    workload = (int)env_int("BENCH_WORKLOAD");
     n_threads = env_int("BENCH_THREADS");
-    warmup_txns = env_int("BENCH_WARMUP_TXNS");
-    txns_per_thread = env_int("BENCH_TXNS_PER_THREAD");
-    range_size = env_int("BENCH_RANGE_SIZE");
     base_seed = env_int("BENCH_SEED");
-    duration_s = env_int_opt("BENCH_DURATION_S", 0);
+    int_rows = env_int_opt("BENCH_INT_ROWS", 1000000);
+    int_batch = env_int_opt("BENCH_INT_BATCH", 10);
+    blob_count = env_int_opt("BENCH_BLOB_COUNT", 100);
+    blob_size = env_int_opt("BENCH_BLOB_SIZE", 1048576);
 
-    if (n_threads <= 0 || table_rows <= 0 || range_size <= 0 ||
-        warmup_txns < 0 || duration_s < 0 ||
-        (duration_s == 0 && txns_per_thread <= 0)) {
+    const char *pf = getenv("BENCH_PROGRESS_FILE");
+    progress_file = (pf != NULL && pf[0] != '\0') ? pf : NULL;
+    progress_sec = env_int_opt("BENCH_PROGRESS_SEC", 5);
+    if (progress_sec <= 0)
+        progress_sec = 5;
+
+    switch (workload) {
+    case 1: workload_name = "int-insert"; unit = "rows/s"; break;
+    case 2: workload_name = "int-read"; unit = "rows/s"; break;
+    case 3: workload_name = "blob-insert"; unit = "blobs/s"; break;
+    case 4: workload_name = "blob-read"; unit = "blobs/s"; break;
+    default:
+        fprintf(stderr, "BENCH_WORKLOAD must be 1..4, got %d\n", workload);
+        return 1;
+    }
+
+    if (n_threads <= 0 || int_rows <= 0 || int_batch <= 0 ||
+        blob_count <= 0 || blob_size <= 0) {
         fprintf(stderr, "invalid workload configuration\n");
         return 1;
     }
 
-    /* Must be called before any threads touch the client library. */
     if (mysql_library_init(0, NULL, NULL)) {
         fprintf(stderr, "mysql_library_init failed\n");
         return 1;
@@ -593,20 +598,39 @@ int main(void)
         fprintf(stderr, "failed to allocate %ld worker structs\n", n_threads);
         return 1;
     }
-    /* Events mode pre-allocates exactly; duration mode seeds a small
-       capacity that record_lat() grows by doubling. */
-    long lat_seed_cap = duration_s > 0 ? 4096 : txns_per_thread;
+
+    /* Latency samples per worker: WL1 one per INSERT, WL2 one per worker,
+       WL3/4 one per blob. */
+    long lat_cap;
+    switch (workload) {
+    case 1: lat_cap = int_rows / int_batch; break;
+    case 2: lat_cap = 1; break;
+    default: lat_cap = blob_count; break;
+    }
+    if (lat_cap <= 0) {
+        fprintf(stderr, "invalid latency capacity (check INT_ROWS/INT_BATCH)\n");
+        return 1;
+    }
+
+    if (progress_file) {
+        progress = calloc((size_t)n_threads, sizeof(long));
+        if (progress == NULL) {
+            fprintf(stderr, "failed to allocate progress slots\n");
+            return 1;
+        }
+    }
+
     for (long i = 0; i < n_threads; i++) {
         workers[i].index = (int)i;
         workers[i].prng_state = base_seed + i;
-        workers[i].retries = 0;
-        workers[i].lat_cap = lat_seed_cap;
+        workers[i].lat_cap = lat_cap;
         workers[i].lat_count = 0;
-        workers[i].lat =
-            malloc((size_t)lat_seed_cap * sizeof(int64_t));
+        workers[i].sink = 0;
+        workers[i].slot = progress ? &progress[i] : NULL;
+        workers[i].lat = malloc((size_t)lat_cap * sizeof(int64_t));
         if (workers[i].lat == NULL) {
             fprintf(stderr, "failed to allocate latency array (%ld entries)\n",
-                    lat_seed_cap);
+                    lat_cap);
             return 1;
         }
     }
@@ -624,10 +648,20 @@ int main(void)
         }
     }
 
-    /* Workers connect, prepare and warm up, then block on the barrier.
-       When the last one arrives, everybody is released: sample t_start. */
+    /* Workers connect and prepare, then block on the barrier. When the last
+       arrives, everybody is released: sample t_start. */
     pthread_barrier_wait(&start_barrier);
     int64_t t_start = now_ns();
+    t_start_ns = t_start;
+
+    pthread_t monitor_tid = 0;
+    bool have_monitor = false;
+    if (progress_file) {
+        if (pthread_create(&monitor_tid, NULL, monitor_main, workers) == 0)
+            have_monitor = true;
+        else
+            fprintf(stderr, "warning: progress monitor thread not started\n");
+    }
 
     for (long i = 0; i < n_threads; i++) {
         if (pthread_join(workers[i].tid, NULL)) {
@@ -637,54 +671,91 @@ int main(void)
     }
     int64_t t_end = now_ns();
 
+    if (have_monitor) {
+        monitor_stop = 1;
+        pthread_join(monitor_tid, NULL);
+    }
+
     pthread_barrier_destroy(&start_barrier);
 
     const char *driver_version = mysql_get_client_info();
 
-    /* Merge latency arrays, sort, percentiles. txns = committed timed
-       transactions across workers (events mode: threads * txns_per_thread). */
-    long txns = 0;
+    /* Merge latency arrays, sort, percentiles. */
+    long n_lat = 0;
     for (long i = 0; i < n_threads; i++)
-        txns += workers[i].lat_count;
-    int64_t *lat = malloc((size_t)txns * sizeof(int64_t));
+        n_lat += workers[i].lat_count;
+    if (n_lat <= 0) {
+        fprintf(stderr, "no latency samples recorded\n");
+        return 1;
+    }
+    int64_t *lat = malloc((size_t)n_lat * sizeof(int64_t));
     if (lat == NULL) {
         fprintf(stderr, "failed to allocate merged latency array\n");
         return 1;
     }
-    int64_t retries = 0;
     long merged = 0;
+    uint64_t sink_total = 0;
     for (long i = 0; i < n_threads; i++) {
         memcpy(lat + merged, workers[i].lat,
                (size_t)workers[i].lat_count * sizeof(int64_t));
         merged += workers[i].lat_count;
-        retries += workers[i].retries;
+        sink_total += workers[i].sink;
         free(workers[i].lat);
     }
-    qsort(lat, (size_t)txns, sizeof(int64_t), cmp_i64);
-    int64_t p50 = percentile(lat, txns, 50);
-    int64_t p95 = percentile(lat, txns, 95);
-    int64_t p99 = percentile(lat, txns, 99);
-    int64_t max_us = lat[txns - 1];
+    g_sink = sink_total; /* consume so app-side work is not eliminated */
+
+    qsort(lat, (size_t)n_lat, sizeof(int64_t), cmp_i64);
+    int64_t p50 = percentile(lat, n_lat, 50);
+    int64_t p95 = percentile(lat, n_lat, 95);
+    int64_t p99 = percentile(lat, n_lat, 99);
+    int64_t max_us = lat[n_lat - 1];
 
     double elapsed_s = (double)(t_end - t_start) / 1e9;
-    double tps = (double)txns / elapsed_s;
-    double qps = tps * 20.0; /* 18 statements + BEGIN + COMMIT */
+
+    int64_t ops;
+    double mb_per_s = 0.0;
+    bool has_mb = false;
+    if (workload == 1 || workload == 2) {
+        ops = (int64_t)n_threads * int_rows;
+    } else {
+        ops = (int64_t)n_threads * blob_count;
+        mb_per_s = (double)ops * (double)blob_size / 1e6 / elapsed_s;
+        has_mb = true;
+    }
+    double throughput = elapsed_s > 0 ? (double)ops / elapsed_s : 0.0;
 
     char client_host[256];
     if (gethostname(client_host, sizeof(client_host)) != 0)
         snprintf(client_host, sizeof(client_host), "unknown");
     client_host[sizeof(client_host) - 1] = '\0';
 
-    printf("{\"lang\":\"c\",\"driver\":\"libmysqlclient\","
+    printf("{\"lang\":\"c\",\"workload\":%d,\"workload_name\":\"%s\","
+           "\"unit\":\"%s\",\"driver\":\"libmysqlclient\","
            "\"driver_version\":\"%s\",\"runtime_version\":\"%s\","
            "\"prepared\":true,\"client_host\":\"%s\",\"db_host\":\"%s\","
-           "\"threads\":%ld,\"txns\":%ld,\"retries\":%" PRId64
-           ",\"errors\":0,\"elapsed_s\":%.3f,\"tps\":%.1f,\"qps\":%.1f,"
-           "\"p50_us\":%" PRId64 ",\"p95_us\":%" PRId64
-           ",\"p99_us\":%" PRId64 ",\"max_us\":%" PRId64 "}\n",
-           driver_version, RUNTIME_VERSION, client_host, cfg_host,
-           n_threads, txns, retries, elapsed_s, tps, qps,
+           "\"threads\":%ld,\"ops\":%" PRId64 ",\"errors\":0,"
+           "\"elapsed_s\":%.3f,\"throughput\":%.1f,",
+           workload, workload_name, unit, driver_version, RUNTIME_VERSION,
+           client_host, cfg_host, n_threads, ops, elapsed_s, throughput);
+    if (has_mb)
+        printf("\"mb_per_s\":%.1f,", mb_per_s);
+    else
+        printf("\"mb_per_s\":0,");
+    printf("\"p50_us\":%" PRId64 ",\"p95_us\":%" PRId64 ",\"p99_us\":%" PRId64
+           ",\"max_us\":%" PRId64 ",\"client_cpu_s\":0,\"server_cpu_s\":0}\n",
            p50, p95, p99, max_us);
+
+    /* Final JSON is on stdout; the partial progress file is now superseded. */
+    if (progress_file) {
+        size_t tcap = strlen(progress_file) + 5;
+        char *tmp = malloc(tcap);
+        if (tmp != NULL) {
+            snprintf(tmp, tcap, "%s.tmp", progress_file);
+            (void)unlink(tmp);
+            free(tmp);
+        }
+        (void)unlink(progress_file);
+    }
 
     free(lat);
     free(workers);

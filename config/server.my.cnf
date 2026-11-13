@@ -43,3 +43,19 @@ innodb_io_capacity = 20000
 innodb_flush_method = O_DIRECT
 innodb_log_buffer_size = 256M
 innodb_doublewrite = OFF
+
+# --- Maximum write throughput, no disk sync after each commit (v3) ---
+# Redo flushed by a background thread ~once/sec, not at commit (set above):
+#   innodb_flush_log_at_trx_commit = 0
+sync_binlog = 0                       # binlog is off anyway (skip-log-bin)
+innodb_flush_neighbors = 0            # SSD/NVMe: don't coalesce neighbor pages
+innodb_io_capacity_max = 40000
+innodb_adaptive_flushing = ON
+innodb_max_dirty_pages_pct = 90       # let dirty pages accumulate in the pool
+innodb_change_buffering = all
+innodb_autoinc_lock_mode = 2          # interleaved auto-inc: concurrent inserts don't serialize
+innodb_purge_threads = 4
+innodb_log_writer_threads = ON
+# Big packets for multi-row INSERTs and 1 MiB blobs
+max_allowed_packet = 256M
+innodb_buffer_pool_chunk_size = 1G
