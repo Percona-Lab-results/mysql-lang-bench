@@ -69,6 +69,7 @@
   svg .seriesname { fill: var(--text-secondary); font-weight: 600; font-size: 11.5px; }
   svg .grouplabel { fill: var(--text-secondary); font-weight: 700; font-size: 11.5px; }
   svg .barval { fill: var(--muted); font-size: 9.5px; }
+  svg .barvalin { font-size: 9.5px; font-weight: 600; }
   #tooltip { position: fixed; pointer-events: none; z-index: 10; display: none;
     background: var(--surface-1); border: 1px solid var(--border); border-radius: 8px;
     box-shadow: 0 4px 14px rgba(0,0,0,0.18); padding: 8px 11px; font-size: 12.5px; min-width: 150px; }
@@ -248,6 +249,29 @@ const PAGE_BARS = true;
     for (const m of [1,1.5,2,2.5,3,4,5,6,8,10]) if (p*m >= v) return p*m;
     return p*10;
   }
+  // A "nice" gridline interval that splits `range` into roughly `ticks` steps.
+  function niceStep(range, ticks) {
+    if (range <= 0) return 1;
+    const raw = range/ticks, p = Math.pow(10, Math.floor(Math.log10(raw))), f = raw/p;
+    return (f<=1?1:f<=2?2:f<=2.5?2.5:f<=5?5:10)*p;
+  }
+  // Readable text color (near-black or white) for a label drawn on top of a
+  // bar fill, picked from the fill's luminance. Resolves CSS vars once, cached.
+  const _barInk = {};
+  function barTextColor(colorVar, alpha) {
+    const key = colorVar + "@" + alpha;
+    if (!(key in _barInk)) {
+      const probe = document.createElement("span");
+      probe.style.cssText = "color:" + colorVar + ";display:none";
+      document.body.appendChild(probe);
+      const m = (getComputedStyle(probe).color.match(/\d+/g) || [0,0,0]).map(Number);
+      probe.remove();
+      let lum = (0.299*m[0] + 0.587*m[1] + 0.114*m[2]) / 255;
+      lum = alpha*lum + (1-alpha);   // faded bars blend toward the white surface
+      _barInk[key] = lum > 0.62 ? "#1a1a19" : "#ffffff";
+    }
+    return _barInk[key];
+  }
 
   function bigChart(cfg) {
     const T = cfg.T, N = T.length;
@@ -348,16 +372,20 @@ const PAGE_BARS = true;
     const T = cfg.T, N = T.length, S = cfg.seriesDefs.length;
     const barH = 13, barGap = 2, groupGap = 18;
     const bandH = S*barH + (S-1)*barGap;
-    // Name-in-label bars ("29.4M - Swift") need a wider right gutter.
-    const BW = 1120, BM = { l: 78, r: cfg.labelName ? 210 : 118, t: 34, b: 30 };
+    // Only a thin right margin: each bar's label sits in the empty space past
+    // its own end, so no global gutter is reserved. The longest bars reach
+    // ~97% of the plot width (axis max = peak/0.97), killing the dead space on
+    // the right; those few whose label would overflow get an inside label.
+    const BW = 1120, BM = { l: 78, r: 26, t: 34, b: 30 };
     const BIW = BW-BM.l-BM.r;
     const BIH = N*bandH + (N-1)*groupGap;
     const BH = BM.t + BIH + BM.b;
-    const X = v => BM.l + (v/cfg.yMax)*BIW;
+    const yMax = cfg.peak/0.97;
+    const step = niceStep(yMax, 5);
+    const X = v => BM.l + (v/yMax)*BIW;
     const svg = el("svg", { viewBox: `0 0 ${BW} ${BH}`, role: "img", "aria-label": cfg.ariaLabel });
     // Throughput gridlines with tick labels along the top.
-    const step = cfg.yMax/5;
-    for (let k=0;k<=5;k++){ const tv=step*k, x=X(tv);
+    for (let k=0; k*step<=yMax+1e-6; k++){ const tv=k*step, x=X(tv);
       svg.appendChild(el("line", { x1: x, x2: x, y1: BM.t, y2: BM.t+BIH, stroke: "var(--grid)", "stroke-width": 1 }));
       const t = el("text", { x: x, y: BM.t-8, "text-anchor": "middle" }); t.textContent = tv===0?"0":fmt(tv); svg.appendChild(t); }
     // Zero axis.
@@ -375,7 +403,7 @@ const PAGE_BARS = true;
       defs.forEach((d, j) => {
         const v = d.vals[ti]; if (v==null) return;
         const by = bandTop + j*(barH+barGap);
-        const w = Math.max(1, (v/cfg.yMax)*BIW);
+        const w = Math.max(1, (v/yMax)*BIW);
         const r = Math.min(4, w, barH/2);
         const rect = el("rect", { x: BM.l, y: by, width: w, height: barH, rx: r, ry: r, fill: d.st.color });
         if (d.st.dash) rect.setAttribute("fill-opacity", "0.55");
@@ -384,9 +412,17 @@ const PAGE_BARS = true;
         rect.addEventListener("pointermove", moveTip);
         rect.addEventListener("pointerleave", hideTip);
         svg.appendChild(rect);
-        const lab = el("text", { x: BM.l+w+5, y: by+barH/2+3.5, "text-anchor": "start", class: "barval" });
-        lab.textContent = cfg.labelName ? fmt(v) + " - " + d.name : fmt(v);
-        svg.appendChild(lab);
+        const txt = cfg.labelName ? fmt(v) + " - " + d.name : fmt(v);
+        const endX = BM.l + w, ty = by + barH/2 + 3.5;
+        const approxW = txt.length*5.7 + 4;
+        let lab;
+        if (endX + 5 + approxW <= BW - 4) {   // label fits to the right of the bar
+          lab = el("text", { x: endX+5, y: ty, "text-anchor": "start", class: "barval" });
+        } else {                              // very long bar: label inside, right-aligned
+          lab = el("text", { x: endX-6, y: ty, "text-anchor": "end", class: "barvalin" });
+          lab.setAttribute("fill", barTextColor(d.st.color, d.st.dash ? 0.55 : 1));
+        }
+        lab.textContent = txt; svg.appendChild(lab);
       });
     });
     const host = document.getElementById(cfg.hostId); if (host) host.appendChild(svg);
@@ -407,7 +443,7 @@ const PAGE_BARS = true;
     legendInto(`legend-w${w}-bars`, shown.map(s => ({ name: labelOf(s), key: keySVG(stOf(s), 26, 12) })));
     barChart({
       hostId: `chart-w${w}-bars`, T: M.threads, seriesDefs: defs,
-      yMax: niceMax(peak), unit: M.unit, sortGroup: PAGE_BARS, labelName: PAGE_BARS,
+      peak: peak, unit: M.unit, sortGroup: PAGE_BARS, labelName: PAGE_BARS,
       ariaLabel: `${M.title}: throughput grouped by worker count`,
     });
   }
