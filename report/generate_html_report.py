@@ -352,22 +352,30 @@ const DATA = __DATA__;
   const styleFor = lang => { const s = STYLE[lang] || {slot:1,shape:"circle"};
     return { color:`var(--cat-${s.slot})`, shape:s.shape }; };
 
+  // Every marker is a filled circle in the series color (with a surface ring so
+  // overlapping markers stay legible), carrying a small WHITE inner glyph that
+  // identifies the language (circle / square / triangle / diamond / tridown /
+  // plus / x / star). Returns a <g> of the circle plus the inner glyph.
   function shapeNode(shape, x, y, color, surface) {
-    const common = { fill: color, stroke: surface, "stroke-width": 2, "stroke-linejoin": "round" };
-    const s = 4.6;
-    if (shape === "circle") return el("circle", { cx: x, cy: y, r: s, ...common });
-    if (shape === "square") return el("rect", { x: x-s+0.4, y: y-s+0.4, width: 2*s-0.8, height: 2*s-0.8, rx: 1, ...common });
-    if (shape === "triangle") return el("path", { d: `M ${x} ${y-s-0.6} L ${x+s+0.4} ${y+s-0.4} L ${x-s-0.4} ${y+s-0.4} Z`, ...common });
-    if (shape === "tridown") return el("path", { d: `M ${x} ${y+s+0.6} L ${x+s+0.4} ${y-s+0.4} L ${x-s-0.4} ${y-s+0.4} Z`, ...common });
-    if (shape === "plus") { const a=1.9,p=s+1;
-      return el("path", { d: `M ${x-a} ${y-p} H ${x+a} V ${y-a} H ${x+p} V ${y+a} H ${x+a} V ${y+p} H ${x-a} V ${y+a} H ${x-p} V ${y-a} H ${x-a} Z`, ...common }); }
-    if (shape === "star") { const ro=s+1.6,ri=2.4,pts=[];
+    const g = el("g", {});
+    g.appendChild(el("circle", { cx: x, cy: y, r: 6, fill: color, stroke: surface, "stroke-width": 2 }));
+    const w = "#ffffff", s = 2.5;
+    const fill = { fill: w };
+    const strk = { stroke: w, "stroke-width": 1.5, "stroke-linecap": "round", fill: "none" };
+    let inner;
+    if (shape === "square") inner = el("rect", { x: x-s+0.3, y: y-s+0.3, width: 2*s-0.6, height: 2*s-0.6, ...fill });
+    else if (shape === "triangle") inner = el("path", { d: `M ${x} ${y-s-0.3} L ${x+s+0.1} ${y+s-0.2} L ${x-s-0.1} ${y+s-0.2} Z`, ...fill });
+    else if (shape === "tridown") inner = el("path", { d: `M ${x} ${y+s+0.3} L ${x+s+0.1} ${y-s+0.2} L ${x-s-0.1} ${y-s+0.2} Z`, ...fill });
+    else if (shape === "diamond") inner = el("path", { d: `M ${x} ${y-s-0.4} L ${x+s+0.4} ${y} L ${x} ${y+s+0.4} L ${x-s-0.4} ${y} Z`, ...fill });
+    else if (shape === "plus") inner = el("path", { d: `M ${x} ${y-s-0.4} V ${y+s+0.4} M ${x-s-0.4} ${y} H ${x+s+0.4}`, ...strk });
+    else if (shape === "x") { const d=s-0.1; inner = el("path", { d: `M ${x-d} ${y-d} L ${x+d} ${y+d} M ${x-d} ${y+d} L ${x+d} ${y-d}`, ...strk }); }
+    else if (shape === "star") { const ro=s+0.6,ri=1.2,pts=[];
       for (let k=0;k<10;k++){ const r=k%2===0?ro:ri, ang=-Math.PI/2+k*Math.PI/5;
         pts.push((x+r*Math.cos(ang)).toFixed(2)+" "+(y+r*Math.sin(ang)).toFixed(2)); }
-      return el("path", { d: "M "+pts.join(" L ")+" Z", ...common }); }
-    if (shape === "x") { const a=1.5,p=s+0.8,m=a*1.42;
-      return el("path", { d: `M ${x-p} ${y-p+m} L ${x-m} ${y-p} L ${x} ${y-m} L ${x+m} ${y-p} L ${x+p} ${y-p+m} L ${x+m} ${y} L ${x+p} ${y+p-m} L ${x+m} ${y+p} L ${x} ${y+m} L ${x-m} ${y+p} L ${x-p} ${y+p-m} L ${x-m} ${y} Z`, ...common }); }
-    return el("path", { d: `M ${x} ${y-s-1} L ${x+s+1} ${y} L ${x} ${y+s+1} L ${x-s-1} ${y} Z`, ...common });
+      inner = el("path", { d: "M "+pts.join(" L ")+" Z", ...fill }); }
+    else inner = el("circle", { cx: x, cy: y, r: 2, ...fill }); // circle (default)
+    g.appendChild(inner);
+    return g;
   }
   function keySVG(st, w, h) {
     const svg = el("svg", { width: w, height: h, viewBox: `0 0 ${w} ${h}`, "aria-hidden": "true" });
@@ -400,6 +408,8 @@ const DATA = __DATA__;
     for (let k=0;k<=5;k++){ const tv=step*k;
       svg.appendChild(el("line", { x1: BM.l, x2: BW-BM.r, y1: Y(tv), y2: Y(tv), stroke: "var(--grid)", "stroke-width": 1 }));
       const t = el("text", { x: BM.l-6, y: Y(tv)+3.5, "text-anchor": "end" }); t.textContent = tv===0?"0":fmt(tv); svg.appendChild(t); }
+    // Vertical gridline at each worker-count position.
+    for (let i=0;i<N;i++) svg.appendChild(el("line", { x1: X(i), x2: X(i), y1: BM.t, y2: BM.t+BIH, stroke: "var(--grid)", "stroke-width": 1 }));
     svg.appendChild(el("line", { x1: BM.l, x2: BW-BM.r, y1: BM.t+BIH, y2: BM.t+BIH, stroke: "var(--baseline)", "stroke-width": 1 }));
     for (let i=0;i<N;i++){ const t = el("text", { x: X(i), y: BH-12, "text-anchor": "middle" }); t.textContent = T[i]; svg.appendChild(t); }
     const path = vals => { let d="",pen=false;
