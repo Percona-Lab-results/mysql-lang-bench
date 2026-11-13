@@ -303,7 +303,7 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
   svg .seriesname { fill: var(--text-secondary); font-weight: 600; font-size: 11.5px; }
   svg .grouplabel { fill: var(--text-secondary); font-weight: 700; font-size: 11.5px; }
   svg .barval { fill: var(--muted); font-size: 9.5px; }
-  svg .barvalin { font-size: 9.5px; font-weight: 600; }
+  svg .barvalin { fill: #ffffff; font-size: 9.5px; font-weight: 600; }
   #tooltip { position: fixed; pointer-events: none; z-index: 10; display: none;
     background: var(--surface-1); border: 1px solid var(--border); border-radius: 8px;
     box-shadow: 0 4px 14px rgba(0,0,0,0.18); padding: 8px 11px; font-size: 12.5px; min-width: 150px; }
@@ -608,9 +608,8 @@ const PAGE_BARS = __PAGE_BARS__;
         let lab;
         if (endX + 5 + approxW <= BW - 4) {   // label fits to the right of the bar
           lab = el("text", { x: endX+5, y: ty, "text-anchor": "start", class: "barval" });
-        } else {                              // very long bar: label inside, right-aligned
+        } else {                              // very long bar: label inside, right-aligned (white via .barvalin)
           lab = el("text", { x: endX-6, y: ty, "text-anchor": "end", class: "barvalin" });
-          lab.setAttribute("fill", "#ffffff");
         }
         lab.textContent = txt; svg.appendChild(lab);
       });
