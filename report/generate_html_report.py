@@ -1,11 +1,17 @@
 #!/usr/bin/env python3
-"""Generate report/report.html plus light-mode PNGs — v3 four-workload report.
+"""Generate the v3 four-workload report pages plus light-mode PNGs.
 
-One throughput-vs-worker-count line chart per workload (1..4). Go and C# carry
-a stock and a tuned run; the "Show optimized Go/C#" toggle (URL ?optimized=0|1,
-default 0) switches the graphs between all-languages/stock and a Go+C#-only
-stock-vs-optimized focus, reloading on change. Each chart is also exported as a
-light-mode PNG (default and optimized variants) into report/png/.
+Two HTML pages share one template and dataset:
+  * report.html — one throughput-vs-worker-count line chart per workload (1..4).
+  * bars.html   — one grouped horizontal bar chart per workload: worker-count
+    groups stacked 512-on-top down to 4, bars sorted best->worst within each
+    group and labelled "<throughput> - <language>".
+
+Go and C# carry a stock and a tuned run; the "Show optimized Go/C#" toggle
+(URL ?optimized=0|1, default 0) switches both pages between all-languages/stock
+and a Go+C#-only stock-vs-optimized focus, reloading on change. Every chart is
+also exported as a light-mode PNG (default and optimized variants) into
+report/png/; bar PNGs are sized to their content so no group is cropped.
 """
 import json
 import os
@@ -16,6 +22,7 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
 OUT = ROOT / "report" / "report.html"
+BARS_OUT = ROOT / "report" / "bars.html"
 PNG_DIR = ROOT / "report" / "png"
 
 DISPLAY = {
@@ -119,43 +126,67 @@ def main():
         f'<div class="tile-value">{v}</div><div class="tile-sub">{s}</div></div>'
         for l, v, s in kpis)
 
-    sections = ""
-    png_ids = []  # (sid, kind): kind "line" or "bars" (bars need a taller PNG)
+    line_sections = ""
+    bar_sections = ""
+    png_line = []   # sid
+    png_bars = []   # (sid, n_default_series, n_optimized_series, n_groups)
     for w in (1, 2, 3, 4):
         if w not in workloads:
             continue
         m = workloads[w]
         sid = f"w{w}"
-        png_ids.append((sid, "line"))
-        png_ids.append((sid + "-bars", "bars"))
+        png_line.append(sid)
+        n_def = len([s for s in m["series"] if s["variant"] != "tuned"])
+        n_opt = len([s for s in m["series"] if s["lang"] in ("go", "csharp")])
+        png_bars.append((f"{sid}-bars", n_def, n_opt, len(m["threads"])))
         tabs = ('<details class="tables"><summary>Table view — throughput ('
                 + m["unit"] + ')</summary><div class="tablewrap">'
                 + table(m["series"], m["threads"]) + '</div></details>')
-        sections += f"""
+        line_sections += f"""
   <section id="sec-{sid}">
     <h2>{m['title']}</h2>
     <p class="sub">{m['sub']}</p>
     <div class="legend" id="legend-{sid}"></div>
     <div class="bigchart" id="chart-{sid}"></div>
     {tabs}
-  </section>
+  </section>"""
+        bar_sections += f"""
   <section id="sec-{sid}-bars">
     <h2>{m['title']} — grouped by worker count</h2>
-    <p class="sub">Throughput ({m['unit']}) per language, grouped by worker count (512 at top down to 4). Same colour and inner glyph per language as above.</p>
+    <p class="sub">Throughput ({m['unit']}) per language, grouped by worker count (512 at top down to 4), bars sorted best&nbsp;&rarr;&nbsp;worst within each group.</p>
     <div class="legend" id="legend-{sid}-bars"></div>
     <div class="bigchart" id="chart-{sid}-bars"></div>
   </section>"""
 
-    html = HTML_TEMPLATE
-    for k, v in {
-        "__DATA__": json.dumps({"workloads": workloads}, separators=(",", ":")),
-        "__KPIS__": kpi_html,
-        "__SECTIONS__": sections,
-        "__NLANG__": str(len(langs)),
-    }.items():
-        html = html.replace(k, v)
-    OUT.write_text(html)
-    print(f"written: {OUT} (workloads: {', '.join(map(str, workloads))}; {len(langs)} languages)")
+    data_json = json.dumps({"workloads": workloads}, separators=(",", ":"))
+
+    def render_page(out_path, sections, page_bars, title, h1, nav):
+        html = HTML_TEMPLATE
+        for k, v in {
+            "__DATA__": data_json,
+            "__KPIS__": kpi_html,
+            "__SECTIONS__": sections,
+            "__NLANG__": str(len(langs)),
+            "__PAGE_BARS__": "true" if page_bars else "false",
+            "__TITLE__": title,
+            "__H1__": h1,
+            "__NAV__": nav,
+        }.items():
+            html = html.replace(k, v)
+        out_path.write_text(html)
+        print(f"written: {out_path}")
+
+    render_page(
+        OUT, line_sections, False,
+        "MySQL client benchmark — four micro-workloads by language",
+        "MySQL client benchmark — four micro-workloads by language",
+        '<a class="navlink" href="bars.html">Bar charts &rarr;</a>')
+    render_page(
+        BARS_OUT, bar_sections, True,
+        "MySQL client benchmark — bar charts by worker count",
+        "MySQL client benchmark — bar charts by worker count",
+        '<a class="navlink" href="report.html">&larr; Line charts &amp; tables</a>')
+    print(f"workloads: {', '.join(map(str, workloads))}; {len(langs)} languages")
 
     if os.environ.get("BENCH_NO_PNG") == "1":
         return
@@ -181,14 +212,24 @@ def main():
               else f"png FAILED {png.name}: {r.stderr.strip()[-200:]}",
               file=sys.stderr if not png.exists() else sys.stdout)
 
-    # Bar charts are tall (one row per language x 8 worker-count groups);
-    # size the PNG window to the content so it isn't cropped.
-    nlang = len(langs)
-    for sid, kind in png_ids:
-        h_def = 1700 if kind == "bars" else 760
-        h_opt = 820 if kind == "bars" else 760   # optimized view = only Go + C#
-        shoot(PNG_DIR / f"{sid}.png", f"file://{OUT}#png-{sid}", h_def)
-        shoot(PNG_DIR / f"{sid}-optimized.png", f"file://{OUT}?optimized=1#png-{sid}", h_opt)
+    def bar_px_h(nseries, ngroups):
+        # Mirror barChart's SVG geometry, scale to the PNG render width, and add
+        # the section chrome (heading, subtitle, legend) so the bars aren't cropped.
+        band = nseries * 13 + max(0, nseries - 1) * 2
+        bih = ngroups * band + max(0, ngroups - 1) * 18
+        bh_svg = 34 + bih + 30
+        svg_px = 1208 * bh_svg / 1120
+        return int(round(svg_px + 230))
+
+    # Line charts: fixed-height PNGs (default and Go/C#-optimized variants).
+    for sid in png_line:
+        shoot(PNG_DIR / f"{sid}.png", f"file://{OUT}#png-{sid}", 760)
+        shoot(PNG_DIR / f"{sid}-optimized.png", f"file://{OUT}?optimized=1#png-{sid}", 760)
+    # Bar charts: height sized to the content (one row per language x worker-count
+    # groups) so the bottom (4-worker) group is never cropped.
+    for sid, n_def, n_opt, ng in png_bars:
+        shoot(PNG_DIR / f"{sid}.png", f"file://{BARS_OUT}#png-{sid}", bar_px_h(n_def, ng))
+        shoot(PNG_DIR / f"{sid}-optimized.png", f"file://{BARS_OUT}?optimized=1#png-{sid}", bar_px_h(n_opt, ng))
 
 
 HTML_TEMPLATE = r"""<!DOCTYPE html>
@@ -196,7 +237,7 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>MySQL client benchmark — four micro-workloads by language</title>
+<title>__TITLE__</title>
 <style>
   .viz-root {
     color-scheme: light;
@@ -277,6 +318,8 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
   thead th { color: var(--text-secondary); font-weight: 600; }
   tbody tr:last-child th, tbody tr:last-child td { border-bottom: none; }
   td.num, th.num { text-align: right; font-variant-numeric: tabular-nums; }
+  .navlink { color: var(--cat-1); text-decoration: none; font-size: 13px; font-weight: 600; align-self: center; }
+  .navlink:hover { text-decoration: underline; }
   footer { color: var(--muted); font-size: 12px; margin-top: 30px; max-width: 86ch; }
   body.pngmode header.page, body.pngmode .kpis, body.pngmode footer, body.pngmode section { display: none; }
   body.pngmode section.png-show { display: block; margin-top: 0; }
@@ -288,7 +331,7 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
 <div class="wrap">
   <header class="page">
     <div>
-      <h1>MySQL client benchmark — four micro-workloads by language</h1>
+      <h1>__H1__</h1>
       <p class="context">Per worker (work scales with worker count): bulk-insert single-int
       rows in 10-row prepared batches, fetch ints and sum in-app, insert 1 MiB blobs with
       in-app MD5, read blobs with in-app MD5. __NLANG__ languages, Percona Server 8.4.11 tuned for maximum
@@ -298,6 +341,7 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
       stock and tuned-runtime curves.</p>
     </div>
     <div class="controls">
+      __NAV__
       <label class="toggle"><input type="checkbox" id="opt-toggle"> Show optimized Go/C#</label>
       <button id="theme-toggle" type="button">Toggle dark mode</button>
     </div>
@@ -320,6 +364,7 @@ __SECTIONS__
 
 <script>
 const DATA = __DATA__;
+const PAGE_BARS = __PAGE_BARS__;
 (function () {
   "use strict";
   const pngMatch = location.hash.match(/^#png-(.+)$/);
@@ -510,7 +555,8 @@ const DATA = __DATA__;
     const T = cfg.T, N = T.length, S = cfg.seriesDefs.length;
     const barH = 13, barGap = 2, groupGap = 18;
     const bandH = S*barH + (S-1)*barGap;
-    const BW = 1120, BM = { l: 78, r: 118, t: 34, b: 30 };
+    // Name-in-label bars ("29.4M - Swift") need a wider right gutter.
+    const BW = 1120, BM = { l: 78, r: cfg.labelName ? 210 : 118, t: 34, b: 30 };
     const BIW = BW-BM.l-BM.r;
     const BIH = N*bandH + (N-1)*groupGap;
     const BH = BM.t + BIH + BM.b;
@@ -525,11 +571,15 @@ const DATA = __DATA__;
     svg.appendChild(el("line", { x1: BM.l, x2: BM.l, y1: BM.t, y2: BM.t+BIH, stroke: "var(--baseline)", "stroke-width": 1 }));
     // Groups, highest worker count on top down to lowest at the bottom.
     const order = T.map((_,i)=>i).reverse();
+    const nn = v => v==null ? -Infinity : v;
     order.forEach((ti, gi) => {
       const bandTop = BM.t + gi*(bandH+groupGap);
       const gl = el("text", { x: BM.l-12, y: bandTop+bandH/2+3.5, "text-anchor": "end", class: "grouplabel" });
       gl.textContent = T[ti]; svg.appendChild(gl);
-      cfg.seriesDefs.forEach((d, j) => {
+      // Within each group, order bars best-performing to worst (nulls last).
+      let defs = cfg.seriesDefs;
+      if (cfg.sortGroup) defs = cfg.seriesDefs.slice().sort((a,b) => nn(b.vals[ti]) - nn(a.vals[ti]));
+      defs.forEach((d, j) => {
         const v = d.vals[ti]; if (v==null) return;
         const by = bandTop + j*(barH+barGap);
         const w = Math.max(1, (v/cfg.yMax)*BIW);
@@ -542,7 +592,8 @@ const DATA = __DATA__;
         rect.addEventListener("pointerleave", hideTip);
         svg.appendChild(rect);
         const lab = el("text", { x: BM.l+w+5, y: by+barH/2+3.5, "text-anchor": "start", class: "barval" });
-        lab.textContent = fmt(v); svg.appendChild(lab);
+        lab.textContent = cfg.labelName ? fmt(v) + " - " + d.name : fmt(v);
+        svg.appendChild(lab);
       });
     });
     const host = document.getElementById(cfg.hostId); if (host) host.appendChild(svg);
@@ -563,7 +614,7 @@ const DATA = __DATA__;
     legendInto(`legend-w${w}-bars`, shown.map(s => ({ name: labelOf(s), key: keySVG(stOf(s), 26, 12) })));
     barChart({
       hostId: `chart-w${w}-bars`, T: M.threads, seriesDefs: defs,
-      yMax: niceMax(peak), unit: M.unit,
+      yMax: niceMax(peak), unit: M.unit, sortGroup: PAGE_BARS, labelName: PAGE_BARS,
       ariaLabel: `${M.title}: throughput grouped by worker count`,
     });
   }
