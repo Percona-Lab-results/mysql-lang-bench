@@ -25,10 +25,9 @@ OUT = ROOT / "report" / "report.html"
 BARS_OUT = ROOT / "report" / "bars.html"
 PNG_DIR = ROOT / "report" / "png"
 
-# Categorical palette (dataviz slots 1..13), light and dark surfaces. Kept here
-# as the single source of truth so we can also emit a 50%-lighter companion of
-# each hue (--cat-N-l), used as the left-hand stop of the bar gradients (which
-# fade from that lighter tint up to the base color at the bar tip).
+# Categorical palette (dataviz slots 1..13), light and dark surfaces. Used for
+# the per-language line charts and legends. (The bar charts colour by in-group
+# performance instead, computing a green->red hue in the browser.)
 PAL_LIGHT = {
     1: "#2a78d6", 2: "#eb6834", 3: "#1baf7a", 4: "#eda100", 5: "#e87ba4",
     6: "#008300", 7: "#6250d6", 8: "#e34948", 9: "#84b000", 10: "#0092c4",
@@ -41,19 +40,9 @@ PAL_DARK = {
 }
 
 
-def lighten(hex_color, frac=0.5):
-    """Return hex_color with each RGB channel moved `frac` of the way to white."""
-    h = hex_color.lstrip("#")
-    r, g, b = (int(h[i:i+2], 16) for i in (0, 2, 4))
-    mix = lambda c: round(c + (255 - c) * frac)
-    return "#%02x%02x%02x" % (mix(r), mix(g), mix(b))
-
-
 def cat_css(pal):
-    """CSS declarations for the base hues plus their 50%-lighter companions."""
-    base = " ".join(f"--cat-{n}: {pal[n]};" for n in sorted(pal))
-    light = " ".join(f"--cat-{n}-l: {lighten(pal[n])};" for n in sorted(pal))
-    return base + "\n      " + light
+    """CSS declarations for the categorical hues."""
+    return " ".join(f"--cat-{n}: {pal[n]};" for n in sorted(pal))
 
 DISPLAY = {
     "c": "C", "cpp": "C++", "swift": "Swift", "rust": "Rust", "php": "PHP",
@@ -183,7 +172,7 @@ def main():
         bar_sections += f"""
   <section id="sec-{sid}-bars">
     <h2>{m['title']} — grouped by worker count</h2>
-    <p class="sub">Throughput ({m['unit']}) per language, grouped by worker count (512 at top down to 4), bars sorted best&nbsp;&rarr;&nbsp;worst within each group.</p>
+    <p class="sub">Throughput ({m['unit']}) per language, grouped by worker count (512 at top down to 4), bars sorted best&nbsp;&rarr;&nbsp;worst within each group and coloured green&nbsp;(fastest)&nbsp;&rarr;&nbsp;red&nbsp;(slowest). A group whose slowest bar is &gt;50% below its fastest spans the full green&ndash;red range by rank; a tighter group shifts hue only as far as each bar's shortfall from the group&rsquo;s best.</p>
     <div class="legend" id="legend-{sid}-bars"></div>
     <div class="bigchart" id="chart-{sid}-bars"></div>
   </section>"""
@@ -322,6 +311,8 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
   .legend { display: flex; gap: 16px; align-items: center; margin: 0 0 10px; color: var(--text-secondary); font-size: 13px; flex-wrap: wrap; }
   .legend .item { display: inline-flex; align-items: center; gap: 6px; }
   .legend svg, #tooltip svg { display: inline-block; vertical-align: middle; }
+  .legend .perfscale { width: 150px; height: 11px; border-radius: 6px;
+    background: linear-gradient(90deg, hsl(120,66%,45%), hsl(60,66%,47%), hsl(0,66%,47%)); }
   .bigchart { background: var(--surface-1); border: 1px solid var(--border); border-radius: 10px; padding: 14px 16px 8px; }
   .bigchart svg { display: block; width: 100%; height: auto; }
   .bigchart svg:focus { outline: 2px solid var(--cat-1); outline-offset: 2px; border-radius: 4px; }
@@ -475,6 +466,15 @@ const PAGE_BARS = __PAGE_BARS__;
     for (const e of entries) { const item = document.createElement("span"); item.className = "item";
       item.appendChild(e.key); item.appendChild(document.createTextNode(e.name)); leg.appendChild(item); }
   }
+  // Bars are coloured by in-group performance, so the bar legend is a green->red
+  // scale rather than a per-language key (languages are named at each bar).
+  function perfLegend(hostId) {
+    const leg = document.getElementById(hostId); if (!leg) return;
+    const a = document.createElement("span"); a.className = "item"; a.textContent = "Fastest in group";
+    const b = document.createElement("span"); b.className = "item"; b.textContent = "Slowest";
+    const bar = document.createElement("span"); bar.className = "perfscale";
+    leg.append(a, bar, b);
+  }
 
   function niceMax(v) {
     if (v <= 0) return 1;
@@ -600,19 +600,15 @@ const PAGE_BARS = __PAGE_BARS__;
     const step = niceStep(yMax, 5);
     const X = v => BM.l + (v/yMax)*BIW;
     const svg = el("svg", { viewBox: `0 0 ${BW} ${BH}`, role: "img", "aria-label": cfg.ariaLabel });
-    // One left->right gradient per palette slot used: the 50%-lighter companion
-    // at the bar start (x=0) deepening to the base series color at the bar tip
-    // (x=1). objectBoundingBox units make each bar span its own full gradient.
-    // Stops use CSS vars via inline style so they stay theme-reactive.
-    const slotOf = d => (d.st.color.match(/--cat-(\d+)/) || [])[1];
+    // Bars are coloured by performance within their group: green for the fastest
+    // row, red for the slowest. Per-bar gradients (built below in the group loop)
+    // run from a 50%-lighter tint at the bar start to the full hue at the tip.
     const gdefs = el("defs", {});
-    for (const sl of [...new Set(cfg.seriesDefs.map(slotOf).filter(Boolean))]) {
-      const g = el("linearGradient", { id: `g-${cfg.hostId}-${sl}`, x1: "0", y1: "0", x2: "1", y2: "0" });
-      const s0 = el("stop", { offset: "0" }); s0.style.stopColor = `var(--cat-${sl}-l)`;
-      const s1 = el("stop", { offset: "1" }); s1.style.stopColor = `var(--cat-${sl})`;
-      g.append(s0, s1); gdefs.appendChild(g);
-    }
     svg.appendChild(gdefs);
+    // hsl helpers: `h` in degrees (120=green .. 0=red). The lighter stop lifts
+    // lightness halfway to white; both read on light and dark surfaces alike.
+    const perfFill = h => `hsl(${h.toFixed(1)}, 66%, 45%)`;
+    const perfTint = h => `hsl(${h.toFixed(1)}, 66%, 73%)`;
     // Throughput gridlines with tick labels along the top.
     for (let k=0; k*step<=yMax+1e-6; k++){ const tv=k*step, x=X(tv);
       svg.appendChild(el("line", { x1: x, x2: x, y1: BM.t, y2: BM.t+BIH, stroke: "var(--grid)", "stroke-width": 1 }));
@@ -629,14 +625,30 @@ const PAGE_BARS = __PAGE_BARS__;
       // Within each group, order bars best-performing to worst (nulls last).
       let defs = cfg.seriesDefs;
       if (cfg.sortGroup) defs = cfg.seriesDefs.slice().sort((a,b) => nn(b.vals[ti]) - nn(a.vals[ti]));
+      // Performance hue per group. If the slowest bar is >50% below the fastest
+      // (a wide spread), map green->red by RANK across the rows. Otherwise the
+      // group is tight, so map each bar's hue by how far its value sits below
+      // the group max (reaching red only at a 50% deficit) — a gentler shift.
+      const present = defs.map((d, idx) => ({ idx, v: d.vals[ti] }))
+                          .filter(o => o.v != null).sort((a, b) => b.v - a.v);
+      const K = present.length, gmax = K ? present[0].v : 0, gmin = K ? present[K-1].v : 0;
+      const spread = gmax > 0 ? (gmax - gmin) / gmax : 0;
+      const rankByValue = spread > 0.5;
+      const rankOf = {}; present.forEach((o, rr) => { rankOf[o.idx] = rr; });
+      const hueFor = (idx, v) => rankByValue
+        ? 120 * (1 - (K > 1 ? rankOf[idx] / (K - 1) : 0))
+        : 120 * (1 - Math.min(gmax > 0 ? (gmax - v) / gmax : 0, 0.5) / 0.5);
       defs.forEach((d, j) => {
         const v = d.vals[ti]; if (v==null) return;
         const by = bandTop + j*(barH+barGap);
         const w = Math.max(1, (v/yMax)*BIW);
         const r = Math.min(4, w, barH/2);
-        const sl = slotOf(d);
-        const rect = el("rect", { x: BM.l, y: by, width: w, height: barH, rx: r, ry: r,
-          fill: sl ? `url(#g-${cfg.hostId}-${sl})` : d.st.color });
+        const hue = hueFor(j, v), gid = `g-${cfg.hostId}-${ti}-${j}`;
+        const grad = el("linearGradient", { id: gid, x1: "0", y1: "0", x2: "1", y2: "0" });
+        const s0 = el("stop", { offset: "0" }); s0.style.stopColor = perfTint(hue);
+        const s1 = el("stop", { offset: "1" }); s1.style.stopColor = perfFill(hue);
+        grad.append(s0, s1); gdefs.appendChild(grad);
+        const rect = el("rect", { x: BM.l, y: by, width: w, height: barH, rx: r, ry: r, fill: `url(#${gid})` });
         if (d.st.dash) rect.setAttribute("fill-opacity", "0.55");
         rect.style.cursor = "crosshair";
         rect.addEventListener("pointerenter", ev => showBar(ev, T[ti], d, v, cfg.unit));
@@ -670,7 +682,7 @@ const PAGE_BARS = __PAGE_BARS__;
       yMax: niceMax(peak), unit: M.unit,
       ariaLabel: `${M.title}: throughput by worker count`,
     });
-    legendInto(`legend-w${w}-bars`, shown.map(s => ({ name: labelOf(s), key: keySVG(stOf(s), 26, 12) })));
+    perfLegend(`legend-w${w}-bars`);
     barChart({
       hostId: `chart-w${w}-bars`, T: M.threads, seriesDefs: defs,
       peak: peak, unit: M.unit, sortGroup: PAGE_BARS, labelName: PAGE_BARS,

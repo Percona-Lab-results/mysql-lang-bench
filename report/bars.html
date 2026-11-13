@@ -12,7 +12,6 @@
     --grid: #e1e0d9; --baseline: #c3c2b7; --band: #898781;
     --border: rgba(11,11,11,0.10);
     --cat-1: #2a78d6; --cat-2: #eb6834; --cat-3: #1baf7a; --cat-4: #eda100; --cat-5: #e87ba4; --cat-6: #008300; --cat-7: #6250d6; --cat-8: #e34948; --cat-9: #84b000; --cat-10: #0092c4; --cat-11: #8c5a2b; --cat-12: #b5174e; --cat-13: #00847c;
-      --cat-1-l: #94bcea; --cat-2-l: #f5b49a; --cat-3-l: #8dd7bc; --cat-4-l: #f6d080; --cat-5-l: #f4bdd2; --cat-6-l: #80c180; --cat-7-l: #b0a8ea; --cat-8-l: #f1a4a4; --cat-9-l: #c2d880; --cat-10-l: #80c8e2; --cat-11-l: #c6ac95; --cat-12-l: #da8ba6; --cat-13-l: #80c2be;
   }
   @media (prefers-color-scheme: dark) {
     :root:where(:not([data-theme="light"])) .viz-root {
@@ -22,7 +21,6 @@
       --grid: #2c2c2a; --baseline: #383835; --band: #898781;
       --border: rgba(255,255,255,0.10);
       --cat-1: #3987e5; --cat-2: #d95926; --cat-3: #199e70; --cat-4: #c98500; --cat-5: #d55181; --cat-6: #008300; --cat-7: #9085e9; --cat-8: #e66767; --cat-9: #a3c636; --cat-10: #35b5e0; --cat-11: #b07845; --cat-12: #d6447c; --cat-13: #2aaea5;
-      --cat-1-l: #9cc3f2; --cat-2-l: #ecac92; --cat-3-l: #8cceb8; --cat-4-l: #e4c280; --cat-5-l: #eaa8c0; --cat-6-l: #80c180; --cat-7-l: #c8c2f4; --cat-8-l: #f2b3b3; --cat-9-l: #d1e29a; --cat-10-l: #9adaf0; --cat-11-l: #d8bca2; --cat-12-l: #eaa2be; --cat-13-l: #94d6d2;
     }
   }
   :root[data-theme="dark"] .viz-root {
@@ -32,7 +30,6 @@
     --grid: #2c2c2a; --baseline: #383835; --band: #898781;
     --border: rgba(255,255,255,0.10);
     --cat-1: #3987e5; --cat-2: #d95926; --cat-3: #199e70; --cat-4: #c98500; --cat-5: #d55181; --cat-6: #008300; --cat-7: #9085e9; --cat-8: #e66767; --cat-9: #a3c636; --cat-10: #35b5e0; --cat-11: #b07845; --cat-12: #d6447c; --cat-13: #2aaea5;
-      --cat-1-l: #9cc3f2; --cat-2-l: #ecac92; --cat-3-l: #8cceb8; --cat-4-l: #e4c280; --cat-5-l: #eaa8c0; --cat-6-l: #80c180; --cat-7-l: #c8c2f4; --cat-8-l: #f2b3b3; --cat-9-l: #d1e29a; --cat-10-l: #9adaf0; --cat-11-l: #d8bca2; --cat-12-l: #eaa2be; --cat-13-l: #94d6d2;
   }
   * { box-sizing: border-box; }
   body.viz-root { margin: 0; background: var(--page); color: var(--text-primary);
@@ -59,6 +56,8 @@
   .legend { display: flex; gap: 16px; align-items: center; margin: 0 0 10px; color: var(--text-secondary); font-size: 13px; flex-wrap: wrap; }
   .legend .item { display: inline-flex; align-items: center; gap: 6px; }
   .legend svg, #tooltip svg { display: inline-block; vertical-align: middle; }
+  .legend .perfscale { width: 150px; height: 11px; border-radius: 6px;
+    background: linear-gradient(90deg, hsl(120,66%,45%), hsl(60,66%,47%), hsl(0,66%,47%)); }
   .bigchart { background: var(--surface-1); border: 1px solid var(--border); border-radius: 10px; padding: 14px 16px 8px; }
   .bigchart svg { display: block; width: 100%; height: auto; }
   .bigchart svg:focus { outline: 2px solid var(--cat-1); outline-offset: 2px; border-radius: 4px; }
@@ -118,25 +117,25 @@
 
   <section id="sec-w1-bars">
     <h2>Workload 1 — integer insert — grouped by worker count</h2>
-    <p class="sub">Throughput (rows/s) per language, grouped by worker count (512 at top down to 4), bars sorted best&nbsp;&rarr;&nbsp;worst within each group.</p>
+    <p class="sub">Throughput (rows/s) per language, grouped by worker count (512 at top down to 4), bars sorted best&nbsp;&rarr;&nbsp;worst within each group and coloured green&nbsp;(fastest)&nbsp;&rarr;&nbsp;red&nbsp;(slowest). A group whose slowest bar is &gt;50% below its fastest spans the full green&ndash;red range by rank; a tighter group shifts hue only as far as each bar's shortfall from the group&rsquo;s best.</p>
     <div class="legend" id="legend-w1-bars"></div>
     <div class="bigchart" id="chart-w1-bars"></div>
   </section>
   <section id="sec-w2-bars">
     <h2>Workload 2 — integer fetch + sum — grouped by worker count</h2>
-    <p class="sub">Throughput (rows/s) per language, grouped by worker count (512 at top down to 4), bars sorted best&nbsp;&rarr;&nbsp;worst within each group.</p>
+    <p class="sub">Throughput (rows/s) per language, grouped by worker count (512 at top down to 4), bars sorted best&nbsp;&rarr;&nbsp;worst within each group and coloured green&nbsp;(fastest)&nbsp;&rarr;&nbsp;red&nbsp;(slowest). A group whose slowest bar is &gt;50% below its fastest spans the full green&ndash;red range by rank; a tighter group shifts hue only as far as each bar's shortfall from the group&rsquo;s best.</p>
     <div class="legend" id="legend-w2-bars"></div>
     <div class="bigchart" id="chart-w2-bars"></div>
   </section>
   <section id="sec-w3-bars">
     <h2>Workload 3 — blob insert + MD5 — grouped by worker count</h2>
-    <p class="sub">Throughput (blobs/s) per language, grouped by worker count (512 at top down to 4), bars sorted best&nbsp;&rarr;&nbsp;worst within each group.</p>
+    <p class="sub">Throughput (blobs/s) per language, grouped by worker count (512 at top down to 4), bars sorted best&nbsp;&rarr;&nbsp;worst within each group and coloured green&nbsp;(fastest)&nbsp;&rarr;&nbsp;red&nbsp;(slowest). A group whose slowest bar is &gt;50% below its fastest spans the full green&ndash;red range by rank; a tighter group shifts hue only as far as each bar's shortfall from the group&rsquo;s best.</p>
     <div class="legend" id="legend-w3-bars"></div>
     <div class="bigchart" id="chart-w3-bars"></div>
   </section>
   <section id="sec-w4-bars">
     <h2>Workload 4 — blob read + MD5 — grouped by worker count</h2>
-    <p class="sub">Throughput (blobs/s) per language, grouped by worker count (512 at top down to 4), bars sorted best&nbsp;&rarr;&nbsp;worst within each group.</p>
+    <p class="sub">Throughput (blobs/s) per language, grouped by worker count (512 at top down to 4), bars sorted best&nbsp;&rarr;&nbsp;worst within each group and coloured green&nbsp;(fastest)&nbsp;&rarr;&nbsp;red&nbsp;(slowest). A group whose slowest bar is &gt;50% below its fastest spans the full green&ndash;red range by rank; a tighter group shifts hue only as far as each bar's shortfall from the group&rsquo;s best.</p>
     <div class="legend" id="legend-w4-bars"></div>
     <div class="bigchart" id="chart-w4-bars"></div>
   </section>
@@ -238,6 +237,15 @@ const PAGE_BARS = true;
     const leg = document.getElementById(hostId); if (!leg) return;
     for (const e of entries) { const item = document.createElement("span"); item.className = "item";
       item.appendChild(e.key); item.appendChild(document.createTextNode(e.name)); leg.appendChild(item); }
+  }
+  // Bars are coloured by in-group performance, so the bar legend is a green->red
+  // scale rather than a per-language key (languages are named at each bar).
+  function perfLegend(hostId) {
+    const leg = document.getElementById(hostId); if (!leg) return;
+    const a = document.createElement("span"); a.className = "item"; a.textContent = "Fastest in group";
+    const b = document.createElement("span"); b.className = "item"; b.textContent = "Slowest";
+    const bar = document.createElement("span"); bar.className = "perfscale";
+    leg.append(a, bar, b);
   }
 
   function niceMax(v) {
@@ -364,19 +372,15 @@ const PAGE_BARS = true;
     const step = niceStep(yMax, 5);
     const X = v => BM.l + (v/yMax)*BIW;
     const svg = el("svg", { viewBox: `0 0 ${BW} ${BH}`, role: "img", "aria-label": cfg.ariaLabel });
-    // One left->right gradient per palette slot used: the 50%-lighter companion
-    // at the bar start (x=0) deepening to the base series color at the bar tip
-    // (x=1). objectBoundingBox units make each bar span its own full gradient.
-    // Stops use CSS vars via inline style so they stay theme-reactive.
-    const slotOf = d => (d.st.color.match(/--cat-(\d+)/) || [])[1];
+    // Bars are coloured by performance within their group: green for the fastest
+    // row, red for the slowest. Per-bar gradients (built below in the group loop)
+    // run from a 50%-lighter tint at the bar start to the full hue at the tip.
     const gdefs = el("defs", {});
-    for (const sl of [...new Set(cfg.seriesDefs.map(slotOf).filter(Boolean))]) {
-      const g = el("linearGradient", { id: `g-${cfg.hostId}-${sl}`, x1: "0", y1: "0", x2: "1", y2: "0" });
-      const s0 = el("stop", { offset: "0" }); s0.style.stopColor = `var(--cat-${sl}-l)`;
-      const s1 = el("stop", { offset: "1" }); s1.style.stopColor = `var(--cat-${sl})`;
-      g.append(s0, s1); gdefs.appendChild(g);
-    }
     svg.appendChild(gdefs);
+    // hsl helpers: `h` in degrees (120=green .. 0=red). The lighter stop lifts
+    // lightness halfway to white; both read on light and dark surfaces alike.
+    const perfFill = h => `hsl(${h.toFixed(1)}, 66%, 45%)`;
+    const perfTint = h => `hsl(${h.toFixed(1)}, 66%, 73%)`;
     // Throughput gridlines with tick labels along the top.
     for (let k=0; k*step<=yMax+1e-6; k++){ const tv=k*step, x=X(tv);
       svg.appendChild(el("line", { x1: x, x2: x, y1: BM.t, y2: BM.t+BIH, stroke: "var(--grid)", "stroke-width": 1 }));
@@ -393,14 +397,30 @@ const PAGE_BARS = true;
       // Within each group, order bars best-performing to worst (nulls last).
       let defs = cfg.seriesDefs;
       if (cfg.sortGroup) defs = cfg.seriesDefs.slice().sort((a,b) => nn(b.vals[ti]) - nn(a.vals[ti]));
+      // Performance hue per group. If the slowest bar is >50% below the fastest
+      // (a wide spread), map green->red by RANK across the rows. Otherwise the
+      // group is tight, so map each bar's hue by how far its value sits below
+      // the group max (reaching red only at a 50% deficit) — a gentler shift.
+      const present = defs.map((d, idx) => ({ idx, v: d.vals[ti] }))
+                          .filter(o => o.v != null).sort((a, b) => b.v - a.v);
+      const K = present.length, gmax = K ? present[0].v : 0, gmin = K ? present[K-1].v : 0;
+      const spread = gmax > 0 ? (gmax - gmin) / gmax : 0;
+      const rankByValue = spread > 0.5;
+      const rankOf = {}; present.forEach((o, rr) => { rankOf[o.idx] = rr; });
+      const hueFor = (idx, v) => rankByValue
+        ? 120 * (1 - (K > 1 ? rankOf[idx] / (K - 1) : 0))
+        : 120 * (1 - Math.min(gmax > 0 ? (gmax - v) / gmax : 0, 0.5) / 0.5);
       defs.forEach((d, j) => {
         const v = d.vals[ti]; if (v==null) return;
         const by = bandTop + j*(barH+barGap);
         const w = Math.max(1, (v/yMax)*BIW);
         const r = Math.min(4, w, barH/2);
-        const sl = slotOf(d);
-        const rect = el("rect", { x: BM.l, y: by, width: w, height: barH, rx: r, ry: r,
-          fill: sl ? `url(#g-${cfg.hostId}-${sl})` : d.st.color });
+        const hue = hueFor(j, v), gid = `g-${cfg.hostId}-${ti}-${j}`;
+        const grad = el("linearGradient", { id: gid, x1: "0", y1: "0", x2: "1", y2: "0" });
+        const s0 = el("stop", { offset: "0" }); s0.style.stopColor = perfTint(hue);
+        const s1 = el("stop", { offset: "1" }); s1.style.stopColor = perfFill(hue);
+        grad.append(s0, s1); gdefs.appendChild(grad);
+        const rect = el("rect", { x: BM.l, y: by, width: w, height: barH, rx: r, ry: r, fill: `url(#${gid})` });
         if (d.st.dash) rect.setAttribute("fill-opacity", "0.55");
         rect.style.cursor = "crosshair";
         rect.addEventListener("pointerenter", ev => showBar(ev, T[ti], d, v, cfg.unit));
@@ -434,7 +454,7 @@ const PAGE_BARS = true;
       yMax: niceMax(peak), unit: M.unit,
       ariaLabel: `${M.title}: throughput by worker count`,
     });
-    legendInto(`legend-w${w}-bars`, shown.map(s => ({ name: labelOf(s), key: keySVG(stOf(s), 26, 12) })));
+    perfLegend(`legend-w${w}-bars`);
     barChart({
       hostId: `chart-w${w}-bars`, T: M.threads, seriesDefs: defs,
       peak: peak, unit: M.unit, sortGroup: PAGE_BARS, labelName: PAGE_BARS,
