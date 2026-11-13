@@ -25,6 +25,15 @@ OUT = ROOT / "report" / "report.html"
 BARS_OUT = ROOT / "report" / "bars.html"
 PNG_DIR = ROOT / "report" / "png"
 
+# PNG export geometry. PNG_W is the output image width in pixels; scale factor 1
+# makes the screenshot exactly that wide. PNG_PAD is the horizontal padding the
+# page adds around a chart in png mode (.wrap 20px + .bigchart 16px, both sides),
+# so the chart SVG itself renders at PNG_W - PNG_PAD px.
+PNG_W = 1024
+PNG_SCALE = 1
+PNG_PAD = 72
+RENDER_W = PNG_W - PNG_PAD
+
 # Categorical palette (dataviz slots 1..13), light and dark surfaces. Used for
 # the per-language line charts and legends. (The bar charts colour by in-group
 # performance instead, computing a green->red hue in the browser.)
@@ -223,8 +232,8 @@ def main():
 
     def shoot(png, url, h):
         cmd = [chromium, "--headless", "--disable-gpu", "--no-sandbox",
-               "--hide-scrollbars", "--force-device-scale-factor=2",
-               f"--screenshot={png}", f"--window-size=1280,{h}", url]
+               "--hide-scrollbars", f"--force-device-scale-factor={PNG_SCALE}",
+               f"--screenshot={png}", f"--window-size={PNG_W},{h}", url]
         try:
             r = subprocess.run(cmd, capture_output=True, text=True, timeout=120)
         except subprocess.TimeoutExpired:
@@ -239,13 +248,15 @@ def main():
         band = nseries * 13 + max(0, nseries - 1) * 2
         bih = ngroups * band + max(0, ngroups - 1) * 18
         bh_svg = 34 + bih + 30
-        svg_px = 1208 * bh_svg / 1120
-        return int(round(svg_px + 230))
+        svg_px = RENDER_W * bh_svg / 1120
+        return int(round(svg_px + 250))
 
-    # Line charts: fixed-height PNGs (default and Go/C#-optimized variants).
+    # Line charts: SVG aspect (viewBox 1120x540) scaled to the render width, plus
+    # section chrome (heading, subtitle, legend) so nothing is cropped.
+    line_h = int(round(RENDER_W * 540 / 1120 + 200))
     for sid in png_line:
-        shoot(PNG_DIR / f"{sid}.png", f"file://{OUT}#png-{sid}", 760)
-        shoot(PNG_DIR / f"{sid}-optimized.png", f"file://{OUT}?optimized=1#png-{sid}", 760)
+        shoot(PNG_DIR / f"{sid}.png", f"file://{OUT}#png-{sid}", line_h)
+        shoot(PNG_DIR / f"{sid}-optimized.png", f"file://{OUT}?optimized=1#png-{sid}", line_h)
     # Bar charts: height sized to the content (one row per language x worker-count
     # groups) so the bottom (4-worker) group is never cropped.
     for sid, n_def, n_opt, ng in png_bars:
