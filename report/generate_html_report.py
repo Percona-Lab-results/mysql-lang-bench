@@ -26,13 +26,13 @@ DISPLAY = {
 # workload id -> (title, subtitle)
 WL = {
     1: ("Workload 1 — integer insert",
-        "Each worker inserts 1,000,000 single-int rows via 10-row prepared-statement batches. Throughput in rows/second."),
+        "Each worker bulk-inserts single-int rows via 10-row prepared-statement batches (autocommit, no per-commit fsync). Throughput in rows/second."),
     2: ("Workload 2 — integer fetch + sum",
-        "Each worker fetches 1,000,000 single-int rows and sums them in application code. Throughput in rows/second."),
+        "Each worker fetches its single-int rows and sums them in application code. Throughput in rows/second."),
     3: ("Workload 3 — blob insert + MD5",
-        "Each worker generates 100 × 1 MiB random blobs, MD5s each in the app, and inserts them. Throughput in blobs/second."),
+        "Each worker generates 1 MiB random blobs, MD5s each in the app, and inserts them. Throughput in blobs/second."),
     4: ("Workload 4 — blob read + MD5",
-        "Each worker reads its 100 × 1 MiB blobs and MD5s each in the app. Throughput in blobs/second."),
+        "Each worker reads its 1 MiB blobs and MD5s each in the app. Throughput in blobs/second."),
 }
 
 
@@ -275,9 +275,9 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
   <header class="page">
     <div>
       <h1>MySQL client benchmark — four micro-workloads by language</h1>
-      <p class="context">Per worker: insert 1M single-int rows (10-row prepared batches),
-      fetch 1M ints and sum in-app, insert 100 × 1 MiB blobs with in-app MD5, read 100
-      blobs with in-app MD5. __NLANG__ languages, Percona Server 8.4.11 tuned for maximum
+      <p class="context">Per worker (work scales with worker count): bulk-insert single-int
+      rows in 10-row prepared batches, fetch ints and sum in-app, insert 1 MiB blobs with
+      in-app MD5, read blobs with in-app MD5. __NLANG__ languages, Percona Server 8.4.11 tuned for maximum
       write throughput (no per-commit disk sync), client and server on one 80-core host,
       workers 4&nbsp;&rarr;&nbsp;512, no pre-warming. All languages run on stock runtime
       defaults; enable <em>Show optimized Go/C#</em> to focus on Go and C# with their

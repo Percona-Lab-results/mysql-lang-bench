@@ -1,0 +1,146 @@
+mysql: [Warning] Using a password on the command line interface can be insecure.
+mysql: [Warning] Using a password on the command line interface can be insecure.
+c w=1 t=4 ok
+c w=2 t=4 ok
+mysql: [Warning] Using a password on the command line interface can be insecure.
+c w=3 t=4 ok
+c w=4 t=4 ok
+mysql: [Warning] Using a password on the command line interface can be insecure.
+c w=1 t=8 ok
+c w=2 t=8 ok
+mysql: [Warning] Using a password on the command line interface can be insecure.
+c w=3 t=8 ok
+c w=4 t=8 ok
+mysql: [Warning] Using a password on the command line interface can be insecure.
+c w=1 t=16 ok
+c w=2 t=16 ok
+mysql: [Warning] Using a password on the command line interface can be insecure.
+c w=3 t=16 ok
+c w=4 t=16 ok
+mysql: [Warning] Using a password on the command line interface can be insecure.
+c w=1 t=32 ok
+c w=2 t=32 ok
+mysql: [Warning] Using a password on the command line interface can be insecure.
+c w=3 t=32 ok
+c w=4 t=32 ok
+mysql: [Warning] Using a password on the command line interface can be insecure.
+c w=1 t=64 ok
+c w=2 t=64 ok
+mysql: [Warning] Using a password on the command line interface can be insecure.
+c w=3 t=64 ok
+c w=4 t=64 ok
+mysql: [Warning] Using a password on the command line interface can be insecure.
+c w=1 t=128 ok
+c w=2 t=128 ok
+mysql: [Warning] Using a password on the command line interface can be insecure.
+c w=3 t=128 ok
+c w=4 t=128 ok
+mysql: [Warning] Using a password on the command line interface can be insecure.
+c w=1 t=256 ok
+c w=2 t=256 ok
+mysql: [Warning] Using a password on the command line interface can be insecure.
+c w=3 t=256 ok
+c w=4 t=256 ok
+mysql: [Warning] Using a password on the command line interface can be insecure.
+c w=1 t=512 ok
+c w=2 t=512 ok
+mysql: [Warning] Using a password on the command line interface can be insecure.
+c w=3 t=512 ok
+c w=4 t=512 ok
+mysql: [Warning] Using a password on the command line interface can be insecure.
+mysql: [Warning] Using a password on the command line interface can be insecure.
+go w=1 t=4-stock ok
+mysql: [Warning] Using a password on the command line interface can be insecure.
+go w=1 t=4-tuned ok
+go w=2 t=4-stock ok
+go w=2 t=4-tuned ok
+mysql: [Warning] Using a password on the command line interface can be insecure.
+go w=3 t=4-stock ok
+mysql: [Warning] Using a password on the command line interface can be insecure.
+go w=3 t=4-tuned ok
+go w=4 t=4-stock ok
+go w=4 t=4-tuned ok
+mysql: [Warning] Using a password on the command line interface can be insecure.
+go w=1 t=8-stock ok
+mysql: [Warning] Using a password on the command line interface can be insecure.
+go w=1 t=8-tuned ok
+go w=2 t=8-stock ok
+go w=2 t=8-tuned ok
+mysql: [Warning] Using a password on the command line interface can be insecure.
+go w=3 t=8-stock ok
+mysql: [Warning] Using a password on the command line interface can be insecure.
+go w=3 t=8-tuned ok
+go w=4 t=8-stock ok
+go w=4 t=8-tuned ok
+mysql: [Warning] Using a password on the command line interface can be insecure.
+go w=1 t=16-stock ok
+mysql: [Warning] Using a password on the command line interface can be insecure.
+go w=1 t=16-tuned ok
+go w=2 t=16-stock ok
+go w=2 t=16-tuned ok
+mysql: [Warning] Using a password on the command line interface can be insecure.
+go w=3 t=16-stock ok
+mysql: [Warning] Using a password on the command line interface can be insecure.
+go w=3 t=16-tuned ok
+go w=4 t=16-stock ok
+go w=4 t=16-tuned ok
+mysql: [Warning] Using a password on the command line interface can be insecure.
+go w=1 t=32-stock ok
+mysql: [Warning] Using a password on the command line interface can be insecure.
+go w=1 t=32-tuned ok
+go w=2 t=32-stock ok
+go w=2 t=32-tuned ok
+mysql: [Warning] Using a password on the command line interface can be insecure.
+go w=3 t=32-stock ok
+mysql: [Warning] Using a password on the command line interface can be insecure.
+go w=3 t=32-tuned ok
+go w=4 t=32-stock ok
+go w=4 t=32-tuned ok
+mysql: [Warning] Using a password on the command line interface can be insecure.
+go w=1 t=64-stock ok
+mysql: [Warning] Using a password on the command line interface can be insecure.
+go w=1 t=64-tuned ok
+go w=2 t=64-stock ok
+go w=2 t=64-tuned ok
+mysql: [Warning] Using a password on the command line interface can be insecure.
+go w=3 t=64-stock ok
+mysql: [Warning] Using a password on the command line interface can be insecure.
+go w=3 t=64-tuned ok
+go w=4 t=64-stock ok
+go w=4 t=64-tuned ok
+mysql: [Warning] Using a password on the command line interface can be insecure.
+go w=1 t=128-stock ok
+mysql: [Warning] Using a password on the command line interface can be insecure.
+go w=1 t=128-tuned ok
+go w=2 t=128-stock ok
+go w=2 t=128-tuned ok
+mysql: [Warning] Using a password on the command line interface can be insecure.
+go w=3 t=128-stock ok
+mysql: [Warning] Using a password on the command line interface can be insecure.
+go w=3 t=128-tuned ok
+go w=4 t=128-stock ok
+go w=4 t=128-tuned ok
+mysql: [Warning] Using a password on the command line interface can be insecure.
+go w=1 t=256-stock ok
+mysql: [Warning] Using a password on the command line interface can be insecure.
+go w=1 t=256-tuned ok
+go w=2 t=256-stock ok
+go w=2 t=256-tuned ok
+mysql: [Warning] Using a password on the command line interface can be insecure.
+go w=3 t=256-stock ok
+mysql: [Warning] Using a password on the command line interface can be insecure.
+go w=3 t=256-tuned ok
+go w=4 t=256-stock ok
+go w=4 t=256-tuned ok
+mysql: [Warning] Using a password on the command line interface can be insecure.
+go w=1 t=512-stock ok
+mysql: [Warning] Using a password on the command line interface can be insecure.
+go w=1 t=512-tuned ok
+go w=2 t=512-stock ok
+go w=2 t=512-tuned ok
+mysql: [Warning] Using a password on the command line interface can be insecure.
+go w=3 t=512-stock ok
+mysql: [Warning] Using a password on the command line interface can be insecure.
+go w=3 t=512-tuned ok
+go w=4 t=512-stock ok
+go w=4 t=512-tuned ok
