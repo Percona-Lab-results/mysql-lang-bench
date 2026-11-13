@@ -25,6 +25,35 @@ OUT = ROOT / "report" / "report.html"
 BARS_OUT = ROOT / "report" / "bars.html"
 PNG_DIR = ROOT / "report" / "png"
 
+# Categorical palette (dataviz slots 1..13), light and dark surfaces. Kept here
+# as the single source of truth so we can also emit a 35%-darker companion of
+# each hue (--cat-N-d), used as the right-hand stop of the bar gradients.
+PAL_LIGHT = {
+    1: "#2a78d6", 2: "#eb6834", 3: "#1baf7a", 4: "#eda100", 5: "#e87ba4",
+    6: "#008300", 7: "#6250d6", 8: "#e34948", 9: "#84b000", 10: "#0092c4",
+    11: "#8c5a2b", 12: "#b5174e", 13: "#00847c",
+}
+PAL_DARK = {
+    1: "#3987e5", 2: "#d95926", 3: "#199e70", 4: "#c98500", 5: "#d55181",
+    6: "#008300", 7: "#9085e9", 8: "#e66767", 9: "#a3c636", 10: "#35b5e0",
+    11: "#b07845", 12: "#d6447c", 13: "#2aaea5",
+}
+
+
+def darken(hex_color, frac=0.35):
+    """Return hex_color with each RGB channel reduced by `frac` (toward black)."""
+    h = hex_color.lstrip("#")
+    r, g, b = (int(h[i:i+2], 16) for i in (0, 2, 4))
+    k = 1.0 - frac
+    return "#%02x%02x%02x" % (round(r*k), round(g*k), round(b*k))
+
+
+def cat_css(pal):
+    """CSS declarations for the base hues plus their 35%-darker companions."""
+    base = " ".join(f"--cat-{n}: {pal[n]};" for n in sorted(pal))
+    dark = " ".join(f"--cat-{n}-d: {darken(pal[n])};" for n in sorted(pal))
+    return base + "\n      " + dark
+
 DISPLAY = {
     "c": "C", "cpp": "C++", "swift": "Swift", "rust": "Rust", "php": "PHP",
     "java": "Java", "csharp": "C#", "go": "Go", "javascript": "JavaScript",
@@ -171,6 +200,8 @@ def main():
             "__TITLE__": title,
             "__H1__": h1,
             "__NAV__": nav,
+            "__CAT_LIGHT__": cat_css(PAL_LIGHT),
+            "__CAT_DARK__": cat_css(PAL_DARK),
         }.items():
             html = html.replace(k, v)
         out_path.write_text(html)
@@ -245,9 +276,7 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
     --text-primary: #0b0b0b; --text-secondary: #52514e; --muted: #898781;
     --grid: #e1e0d9; --baseline: #c3c2b7; --band: #898781;
     --border: rgba(11,11,11,0.10);
-    --cat-1: #2a78d6; --cat-2: #eb6834; --cat-3: #1baf7a; --cat-4: #eda100;
-    --cat-5: #e87ba4; --cat-6: #008300; --cat-7: #6250d6; --cat-8: #e34948;
-    --cat-9: #84b000; --cat-10: #0092c4; --cat-11: #8c5a2b; --cat-12: #b5174e; --cat-13: #00847c;
+    __CAT_LIGHT__
   }
   @media (prefers-color-scheme: dark) {
     :root:where(:not([data-theme="light"])) .viz-root {
@@ -256,9 +285,7 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
       --text-primary: #f0efec; --text-secondary: #c3c2b7; --muted: #898781;
       --grid: #2c2c2a; --baseline: #383835; --band: #898781;
       --border: rgba(255,255,255,0.10);
-      --cat-1: #3987e5; --cat-2: #d95926; --cat-3: #199e70; --cat-4: #c98500;
-      --cat-5: #d55181; --cat-6: #008300; --cat-7: #9085e9; --cat-8: #e66767;
-      --cat-9: #a3c636; --cat-10: #35b5e0; --cat-11: #b07845; --cat-12: #d6447c; --cat-13: #2aaea5;
+      __CAT_DARK__
     }
   }
   :root[data-theme="dark"] .viz-root {
@@ -267,9 +294,7 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
     --text-primary: #f0efec; --text-secondary: #c3c2b7; --muted: #898781;
     --grid: #2c2c2a; --baseline: #383835; --band: #898781;
     --border: rgba(255,255,255,0.10);
-    --cat-1: #3987e5; --cat-2: #d95926; --cat-3: #199e70; --cat-4: #c98500;
-    --cat-5: #d55181; --cat-6: #008300; --cat-7: #9085e9; --cat-8: #e66767;
-    --cat-9: #a3c636; --cat-10: #35b5e0; --cat-11: #b07845; --cat-12: #d6447c; --cat-13: #2aaea5;
+    __CAT_DARK__
   }
   * { box-sizing: border-box; }
   body.viz-root { margin: 0; background: var(--page); color: var(--text-primary);
@@ -574,6 +599,19 @@ const PAGE_BARS = __PAGE_BARS__;
     const step = niceStep(yMax, 5);
     const X = v => BM.l + (v/yMax)*BIW;
     const svg = el("svg", { viewBox: `0 0 ${BW} ${BH}`, role: "img", "aria-label": cfg.ariaLabel });
+    // One left->right gradient per palette slot used: the series color at the
+    // bar start (x=0) fading to its 35%-darker companion at the bar tip (x=1).
+    // objectBoundingBox units make each bar span its own full gradient. Stops
+    // use CSS vars via inline style so they stay theme-reactive.
+    const slotOf = d => (d.st.color.match(/--cat-(\d+)/) || [])[1];
+    const gdefs = el("defs", {});
+    for (const sl of [...new Set(cfg.seriesDefs.map(slotOf).filter(Boolean))]) {
+      const g = el("linearGradient", { id: `g-${cfg.hostId}-${sl}`, x1: "0", y1: "0", x2: "1", y2: "0" });
+      const s0 = el("stop", { offset: "0" }); s0.style.stopColor = `var(--cat-${sl})`;
+      const s1 = el("stop", { offset: "1" }); s1.style.stopColor = `var(--cat-${sl}-d)`;
+      g.append(s0, s1); gdefs.appendChild(g);
+    }
+    svg.appendChild(gdefs);
     // Throughput gridlines with tick labels along the top.
     for (let k=0; k*step<=yMax+1e-6; k++){ const tv=k*step, x=X(tv);
       svg.appendChild(el("line", { x1: x, x2: x, y1: BM.t, y2: BM.t+BIH, stroke: "var(--grid)", "stroke-width": 1 }));
@@ -595,7 +633,9 @@ const PAGE_BARS = __PAGE_BARS__;
         const by = bandTop + j*(barH+barGap);
         const w = Math.max(1, (v/yMax)*BIW);
         const r = Math.min(4, w, barH/2);
-        const rect = el("rect", { x: BM.l, y: by, width: w, height: barH, rx: r, ry: r, fill: d.st.color });
+        const sl = slotOf(d);
+        const rect = el("rect", { x: BM.l, y: by, width: w, height: barH, rx: r, ry: r,
+          fill: sl ? `url(#g-${cfg.hostId}-${sl})` : d.st.color });
         if (d.st.dash) rect.setAttribute("fill-opacity", "0.55");
         rect.style.cursor = "crosshair";
         rect.addEventListener("pointerenter", ev => showBar(ev, T[ti], d, v, cfg.unit));

@@ -11,9 +11,8 @@
     --text-primary: #0b0b0b; --text-secondary: #52514e; --muted: #898781;
     --grid: #e1e0d9; --baseline: #c3c2b7; --band: #898781;
     --border: rgba(11,11,11,0.10);
-    --cat-1: #2a78d6; --cat-2: #eb6834; --cat-3: #1baf7a; --cat-4: #eda100;
-    --cat-5: #e87ba4; --cat-6: #008300; --cat-7: #6250d6; --cat-8: #e34948;
-    --cat-9: #84b000; --cat-10: #0092c4; --cat-11: #8c5a2b; --cat-12: #b5174e; --cat-13: #00847c;
+    --cat-1: #2a78d6; --cat-2: #eb6834; --cat-3: #1baf7a; --cat-4: #eda100; --cat-5: #e87ba4; --cat-6: #008300; --cat-7: #6250d6; --cat-8: #e34948; --cat-9: #84b000; --cat-10: #0092c4; --cat-11: #8c5a2b; --cat-12: #b5174e; --cat-13: #00847c;
+      --cat-1-d: #1b4e8b; --cat-2-d: #994422; --cat-3-d: #12724f; --cat-4-d: #9a6900; --cat-5-d: #97506b; --cat-6-d: #005500; --cat-7-d: #40348b; --cat-8-d: #942f2f; --cat-9-d: #567200; --cat-10-d: #005f7f; --cat-11-d: #5b3a1c; --cat-12-d: #760f33; --cat-13-d: #005651;
   }
   @media (prefers-color-scheme: dark) {
     :root:where(:not([data-theme="light"])) .viz-root {
@@ -22,9 +21,8 @@
       --text-primary: #f0efec; --text-secondary: #c3c2b7; --muted: #898781;
       --grid: #2c2c2a; --baseline: #383835; --band: #898781;
       --border: rgba(255,255,255,0.10);
-      --cat-1: #3987e5; --cat-2: #d95926; --cat-3: #199e70; --cat-4: #c98500;
-      --cat-5: #d55181; --cat-6: #008300; --cat-7: #9085e9; --cat-8: #e66767;
-      --cat-9: #a3c636; --cat-10: #35b5e0; --cat-11: #b07845; --cat-12: #d6447c; --cat-13: #2aaea5;
+      --cat-1: #3987e5; --cat-2: #d95926; --cat-3: #199e70; --cat-4: #c98500; --cat-5: #d55181; --cat-6: #008300; --cat-7: #9085e9; --cat-8: #e66767; --cat-9: #a3c636; --cat-10: #35b5e0; --cat-11: #b07845; --cat-12: #d6447c; --cat-13: #2aaea5;
+      --cat-1-d: #255895; --cat-2-d: #8d3a19; --cat-3-d: #106749; --cat-4-d: #835600; --cat-5-d: #8a3554; --cat-6-d: #005500; --cat-7-d: #5e5697; --cat-8-d: #964343; --cat-9-d: #6a8123; --cat-10-d: #227692; --cat-11-d: #724e2d; --cat-12-d: #8b2c51; --cat-13-d: #1b716b;
     }
   }
   :root[data-theme="dark"] .viz-root {
@@ -33,9 +31,8 @@
     --text-primary: #f0efec; --text-secondary: #c3c2b7; --muted: #898781;
     --grid: #2c2c2a; --baseline: #383835; --band: #898781;
     --border: rgba(255,255,255,0.10);
-    --cat-1: #3987e5; --cat-2: #d95926; --cat-3: #199e70; --cat-4: #c98500;
-    --cat-5: #d55181; --cat-6: #008300; --cat-7: #9085e9; --cat-8: #e66767;
-    --cat-9: #a3c636; --cat-10: #35b5e0; --cat-11: #b07845; --cat-12: #d6447c; --cat-13: #2aaea5;
+    --cat-1: #3987e5; --cat-2: #d95926; --cat-3: #199e70; --cat-4: #c98500; --cat-5: #d55181; --cat-6: #008300; --cat-7: #9085e9; --cat-8: #e66767; --cat-9: #a3c636; --cat-10: #35b5e0; --cat-11: #b07845; --cat-12: #d6447c; --cat-13: #2aaea5;
+      --cat-1-d: #255895; --cat-2-d: #8d3a19; --cat-3-d: #106749; --cat-4-d: #835600; --cat-5-d: #8a3554; --cat-6-d: #005500; --cat-7-d: #5e5697; --cat-8-d: #964343; --cat-9-d: #6a8123; --cat-10-d: #227692; --cat-11-d: #724e2d; --cat-12-d: #8b2c51; --cat-13-d: #1b716b;
   }
   * { box-sizing: border-box; }
   body.viz-root { margin: 0; background: var(--page); color: var(--text-primary);
@@ -431,6 +428,19 @@ const PAGE_BARS = false;
     const step = niceStep(yMax, 5);
     const X = v => BM.l + (v/yMax)*BIW;
     const svg = el("svg", { viewBox: `0 0 ${BW} ${BH}`, role: "img", "aria-label": cfg.ariaLabel });
+    // One left->right gradient per palette slot used: the series color at the
+    // bar start (x=0) fading to its 35%-darker companion at the bar tip (x=1).
+    // objectBoundingBox units make each bar span its own full gradient. Stops
+    // use CSS vars via inline style so they stay theme-reactive.
+    const slotOf = d => (d.st.color.match(/--cat-(\d+)/) || [])[1];
+    const gdefs = el("defs", {});
+    for (const sl of [...new Set(cfg.seriesDefs.map(slotOf).filter(Boolean))]) {
+      const g = el("linearGradient", { id: `g-${cfg.hostId}-${sl}`, x1: "0", y1: "0", x2: "1", y2: "0" });
+      const s0 = el("stop", { offset: "0" }); s0.style.stopColor = `var(--cat-${sl})`;
+      const s1 = el("stop", { offset: "1" }); s1.style.stopColor = `var(--cat-${sl}-d)`;
+      g.append(s0, s1); gdefs.appendChild(g);
+    }
+    svg.appendChild(gdefs);
     // Throughput gridlines with tick labels along the top.
     for (let k=0; k*step<=yMax+1e-6; k++){ const tv=k*step, x=X(tv);
       svg.appendChild(el("line", { x1: x, x2: x, y1: BM.t, y2: BM.t+BIH, stroke: "var(--grid)", "stroke-width": 1 }));
@@ -452,7 +462,9 @@ const PAGE_BARS = false;
         const by = bandTop + j*(barH+barGap);
         const w = Math.max(1, (v/yMax)*BIW);
         const r = Math.min(4, w, barH/2);
-        const rect = el("rect", { x: BM.l, y: by, width: w, height: barH, rx: r, ry: r, fill: d.st.color });
+        const sl = slotOf(d);
+        const rect = el("rect", { x: BM.l, y: by, width: w, height: barH, rx: r, ry: r,
+          fill: sl ? `url(#g-${cfg.hostId}-${sl})` : d.st.color });
         if (d.st.dash) rect.setAttribute("fill-opacity", "0.55");
         rect.style.cursor = "crosshair";
         rect.addEventListener("pointerenter", ev => showBar(ev, T[ti], d, v, cfg.unit));
