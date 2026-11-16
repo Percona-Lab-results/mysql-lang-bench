@@ -101,17 +101,27 @@ def build_workload(latest, w):
     series = []
     for lang, variant in groups:
         thr = []
+        cpu = []   # total (client+server) CPU microseconds per operation
         for t in threads:
             r = latest.get((w, lang, variant, t))
             thr.append(round(r["throughput"], 1) if r else None)
             if r:
                 unit = r.get("unit", unit)
+                ops = r.get("ops") or 0
+                cc = r.get("client_cpu_s"); sc = r.get("server_cpu_s")
+                if ops and cc is not None and sc is not None:
+                    cpu.append(round((cc + sc) * 1e6 / ops, 2))
+                else:
+                    cpu.append(None)
+            else:
+                cpu.append(None)
         if any(v is not None for v in thr):
             series.append({
                 "lang": lang,
                 "name": DISPLAY.get(lang, lang),
                 "variant": "stock" if variant is False else ("tuned" if variant is True else "na"),
                 "thr": thr,
+                "cpu": cpu,
                 "peak": max(v for v in thr if v is not None),
             })
     if not series:
@@ -158,6 +168,7 @@ def main():
         m = workloads[w]
         sid = f"w{w}"
         png_line.append(sid)
+        png_line.append(f"{sid}-cpu")
         n_def = len([s for s in m["series"] if s["variant"] != "tuned"])
         n_opt = len([s for s in m["series"] if s["lang"] in ("go", "csharp")])
         png_bars.append((f"{sid}-bars", n_def, n_opt, len(m["threads"])))
@@ -172,6 +183,12 @@ def main():
     <div class="legend" id="legend-{sid}"></div>
     <div class="bigchart" id="chart-{sid}"></div>
     {tabs}
+  </section>
+  <section id="sec-{sid}-cpu">
+    <h2>{m['title']} — CPU cost</h2>
+    <p class="sub">Total CPU consumed per operation (benchmark client + mysqld server), in microseconds of CPU per {'row' if w in (1,2) else 'blob'}. Lower is cheaper; it combines both sides, so it can exceed wall-clock time per op when work runs on many cores.</p>
+    <div class="legend" id="legend-{sid}-cpu"></div>
+    <div class="bigchart" id="chart-{sid}-cpu"></div>
   </section>"""
         bar_sections += f"""
   <section id="sec-{sid}-bars">
@@ -393,6 +410,10 @@ const PAGE_BARS = __PAGE_BARS__;
   const fmt = v => v >= 1e6 ? (v / 1e6).toFixed(1) + "M"
     : v >= 10000 ? Math.round(v / 1000) + "K" : Math.round(v).toLocaleString("en-US");
   const fmtFull = v => Math.round(v).toLocaleString("en-US");
+  // CPU cost (us/op) spans ~0.1 to ~1e5; keep a couple of significant digits.
+  const fmtCpu = v => v >= 10000 ? Math.round(v/1000) + "k"
+    : v >= 100 ? Math.round(v).toLocaleString("en-US")
+    : v >= 10 ? v.toFixed(0) : v >= 1 ? v.toFixed(1) : v.toFixed(2);
   const ns = "http://www.w3.org/2000/svg";
   const el = (name, attrs) => { const e = document.createElementNS(ns, name);
     for (const k in attrs) e.setAttribute(k, attrs[k]); return e; };
@@ -469,6 +490,7 @@ const PAGE_BARS = __PAGE_BARS__;
 
   function bigChart(cfg) {
     const T = cfg.T, N = T.length;
+    const FY = cfg.fmtY || fmt;   // y-axis + end-label number format
     const BW = 1120, BH = 540, BM = { l: 64, r: 184, t: 14, b: 32 };
     const BIW = BW-BM.l-BM.r, BIH = BH-BM.t-BM.b;
     const X = i => BM.l + i*BIW/(N-1);
@@ -477,7 +499,7 @@ const PAGE_BARS = __PAGE_BARS__;
     const step = cfg.yMax/5;
     for (let k=0;k<=5;k++){ const tv=step*k;
       svg.appendChild(el("line", { x1: BM.l, x2: BW-BM.r, y1: Y(tv), y2: Y(tv), stroke: "var(--grid)", "stroke-width": 1 }));
-      const t = el("text", { x: BM.l-6, y: Y(tv)+3.5, "text-anchor": "end" }); t.textContent = tv===0?"0":fmt(tv); svg.appendChild(t); }
+      const t = el("text", { x: BM.l-6, y: Y(tv)+3.5, "text-anchor": "end" }); t.textContent = tv===0?"0":FY(tv); svg.appendChild(t); }
     // Vertical gridline at each worker-count position.
     for (let i=0;i<N;i++) svg.appendChild(el("line", { x1: X(i), x2: X(i), y1: BM.t, y2: BM.t+BIH, stroke: "var(--grid)", "stroke-width": 1 }));
     svg.appendChild(el("line", { x1: BM.l, x2: BW-BM.r, y1: BM.t+BIH, y2: BM.t+BIH, stroke: "var(--baseline)", "stroke-width": 1 }));
@@ -509,7 +531,7 @@ const PAGE_BARS = __PAGE_BARS__;
       // End-of-line reference label (language + score) in the series' own colour.
       const t = el("text", { x: X(N-1)+26, y: L.y+3.5, class: "seriesname" });
       t.style.fill = L.d.st.color;
-      t.textContent = L.d.name + "  " + fmt(L.d.vals[L.li]); svg.appendChild(t);
+      t.textContent = L.d.name + "  " + FY(L.d.vals[L.li]); svg.appendChild(t);
     }
     const cross = el("line", { y1: BM.t, y2: BM.t+BIH, stroke: "var(--baseline)", "stroke-width": 1, visibility: "hidden" });
     svg.appendChild(cross);
@@ -522,7 +544,7 @@ const PAGE_BARS = __PAGE_BARS__;
       for (const d of ranked) { const row = document.createElement("div"); row.className = "tt-row";
         row.appendChild(keySVG(d.st, 20, 11));
         const val = document.createElement("span"); val.className = "tt-val";
-        val.textContent = d.vals[i]==null ? "n/a" : fmtFull(d.vals[i]) + " " + cfg.unit;
+        val.textContent = d.vals[i]==null ? "n/a" : (cfg.fmtY ? FY(d.vals[i]) : fmtFull(d.vals[i])) + " " + cfg.unit;
         const name = document.createElement("span"); name.className = "tt-name"; name.textContent = d.name;
         row.append(val, name); tooltip.appendChild(row); }
       tooltip.style.display = "block";
@@ -671,6 +693,18 @@ const PAGE_BARS = __PAGE_BARS__;
       peak: peak, unit: M.unit, sortGroup: PAGE_BARS, labelName: PAGE_BARS,
       ariaLabel: `${M.title}: throughput grouped by worker count`,
     });
+    // CPU-cost line chart (us of client+server CPU per operation).
+    if (document.getElementById(`chart-w${w}-cpu`)) {
+      const cdefs = shown.filter(s => s.cpu && s.cpu.some(v => v != null))
+        .map(s => ({ name: labelOf(s), vals: s.cpu, st: stOf(s) }));
+      legendInto(`legend-w${w}-cpu`, cdefs.map(d => ({ name: d.name, key: keySVG(d.st, 26, 12) })));
+      const cpeak = Math.max(...cdefs.flatMap(d => d.vals.filter(v => v != null)), 0.001);
+      bigChart({
+        hostId: `chart-w${w}-cpu`, T: M.threads, seriesDefs: cdefs,
+        yMax: niceMax(cpeak), unit: "µs CPU/op", fmtY: fmtCpu,
+        ariaLabel: `${M.title}: CPU cost per operation by worker count`,
+      });
+    }
   }
 
   document.getElementById("theme-toggle").addEventListener("click", () => {
