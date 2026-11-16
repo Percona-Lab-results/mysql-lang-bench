@@ -400,10 +400,10 @@ def main():
         return
     PNG_DIR.mkdir(exist_ok=True)
 
-    def shoot(png, url, h):
+    def shoot(png, url, h, w=PNG_W):
         cmd = [chromium, "--headless", "--disable-gpu", "--no-sandbox",
                "--hide-scrollbars", f"--force-device-scale-factor={PNG_SCALE}",
-               f"--screenshot={png}", f"--window-size={PNG_W},{h}", url]
+               f"--screenshot={png}", f"--window-size={w},{h}", url]
         try:
             r = subprocess.run(cmd, capture_output=True, text=True, timeout=120)
         except subprocess.TimeoutExpired:
@@ -434,10 +434,12 @@ def main():
     # groups) so the bottom (4-worker) group is never cropped.
     for sid, n_def, n_opt, ng in png_bars:
         shoot(PNG_DIR / f"{sid}.png", f"file://{BARS_OUT}#png-{sid}", bar_px_h(n_def, ng))
-    # Annotated line charts: taller SVG (viewBox 1120x840) so per-node labels fit.
-    ann_h = int(round(RENDER_W * 840 / 1120 + 230))
+    # Annotated line charts: wider and taller SVG (viewBox 1400x840) so per-node
+    # labels fit; exported at a wider PNG so the extra width is real pixels.
+    ANN_W = 1400
+    ann_h = int(round((ANN_W - PNG_PAD) * 840 / 1400 + 230))
     for sid in png_ann:
-        shoot(PNG_DIR / f"{sid}.png", f"file://{ANN_OUT}#png-{sid}", ann_h)
+        shoot(PNG_DIR / f"{sid}.png", f"file://{ANN_OUT}#png-{sid}", ann_h, ANN_W)
     # Infographic summary: full static page — header + stats + legend, then one
     # stacked heatmap panel per workload (a 27px row per language + chrome).
     info_h = 420 + sum(len(m["series"]) * 27 + 118 for m in workloads.values())
@@ -529,7 +531,7 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
   body.pngmode header.page, body.pngmode footer, body.pngmode section { display: none; }
   body.pngmode section.png-show { display: block; margin-top: 0; }
   body.pngmode section.png-show details.tables { display: none; }
-  body.pngmode .wrap { padding: 16px 20px; }
+  body.pngmode .wrap { padding: 16px 20px; max-width: none; }
 </style>
 </head>
 <body class="viz-root">
@@ -613,9 +615,9 @@ const PAGE_BARS = __PAGE_BARS__;
   // overlapping markers stay legible), carrying a small WHITE inner glyph that
   // identifies the language (circle / square / triangle / diamond / tridown /
   // plus / x / star). Returns a <g> of the circle plus the inner glyph.
-  function shapeNode(shape, x, y, color, surface) {
+  function shapeNode(shape, x, y, color, surface, ring = 2) {
     const g = el("g", {});
-    g.appendChild(el("circle", { cx: x, cy: y, r: 6, fill: color, stroke: surface, "stroke-width": 2 }));
+    g.appendChild(el("circle", { cx: x, cy: y, r: 6, fill: color, stroke: surface, "stroke-width": ring }));
     const w = "#ffffff", s = 2.5;
     const fill = { fill: w };
     const strk = { stroke: w, "stroke-width": 1.5, "stroke-linecap": "round", fill: "none" };
@@ -672,7 +674,7 @@ const PAGE_BARS = __PAGE_BARS__;
   function bigChart(cfg) {
     const T = cfg.T, N = T.length;
     const FY = cfg.fmtY || fmt;   // y-axis + end-label number format
-    const BW = 1120, BH = cfg.height || 540, BM = { l: 64, r: 184, t: 14, b: 32 };
+    const BW = cfg.width || 1120, BH = cfg.height || 540, BM = { l: 64, r: 184, t: 14, b: 32 };
     const BIW = BW-BM.l-BM.r, BIH = BH-BM.t-BM.b;
     const X = i => BM.l + i*BIW/(N-1);
     const Y = v => BM.t + BIH - (v/cfg.yMax)*BIH;
@@ -713,7 +715,7 @@ const PAGE_BARS = __PAGE_BARS__;
       const lp = el("path", { d: path(d.vals), fill: "none", stroke: d.st.color, "stroke-width": 2.4, "stroke-linejoin": "round", "stroke-linecap": "round" });
       if (d.st.dash) lp.setAttribute("stroke-dasharray", "7 5");
       lines.appendChild(lp);
-      for (let i=0;i<N;i++){ if (d.vals[i]==null) continue; marks.appendChild(shapeNode(d.st.shape, X(i), Y(d.vals[i]), d.st.color, "var(--surface-1)")); }
+      for (let i=0;i<N;i++){ if (d.vals[i]==null) continue; marks.appendChild(shapeNode(d.st.shape, X(i), Y(d.vals[i]), d.st.color, "var(--surface-1)", cfg.nodeLabels ? 0.8 : 2)); }
     }
     svg.appendChild(lines);
     if (cfg.nodeLabels) {
@@ -741,11 +743,11 @@ const PAGE_BARS = __PAGE_BARS__;
         const topOver = items.length ? (BM.t + 5) - items[0].y : 0;
         if (topOver > 0) { items[0].y += topOver;
           for (let k = 1; k < items.length; k++) if (items[k].y - items[k-1].y < GAPN) items[k].y = items[k-1].y + GAPN; }
-        // Label text starts a clear gap past the node (marker radius 6 + 10px).
-        const lx = X(i) + 16;
+        // Label text starts well clear of the node so the leader is visible.
+        const lx = X(i) + 34;
         for (const L of items) {
           if (Math.abs(L.y - L.y0) > 2.5) {
-            const ldr = el("line", { x1: X(i)+7, y1: L.y0, x2: lx-4, y2: L.y, "stroke-width": 0.9, "stroke-opacity": "0.6" });
+            const ldr = el("line", { x1: X(i)+7, y1: L.y0, x2: lx-5, y2: L.y, "stroke-width": 1, "stroke-opacity": "0.7" });
             ldr.style.stroke = L.d.st.color; svg.appendChild(ldr);
           }
           const t = el("text", { x: lx, y: L.y + 3.3, class: "nodelabel" });
@@ -938,7 +940,7 @@ const PAGE_BARS = __PAGE_BARS__;
       legendInto(`legend-w${w}-ann`, shown.map(s => ({ name: labelOf(s), key: keySVG(stOf(s), 26, 12) })));
       bigChart({
         hostId: `chart-w${w}-ann`, T: M.threads, seriesDefs: defs,
-        yMax: niceMax(peak), unit: M.unit, nodeLabels: true, height: 840,
+        yMax: niceMax(peak), unit: M.unit, nodeLabels: true, height: 840, width: 1400,
         ariaLabel: `${M.title}: throughput by worker count, every point labelled`,
       });
     }
