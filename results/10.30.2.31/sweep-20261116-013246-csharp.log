@@ -1,0 +1,49 @@
+mysql: [Warning] Using a password on the command line interface can be insecure.
+mysql: [Warning] Using a password on the command line interface can be insecure.
+csharp w=1 t=4-stock ok
+mysql: [Warning] Using a password on the command line interface can be insecure.
+csharp w=1 t=4-tuned ok
+csharp w=2 t=4-stock ok
+csharp w=2 t=4-tuned ok
+mysql: [Warning] Using a password on the command line interface can be insecure.
+csharp w=1 t=8-stock ok
+mysql: [Warning] Using a password on the command line interface can be insecure.
+csharp w=1 t=8-tuned ok
+csharp w=2 t=8-stock ok
+csharp w=2 t=8-tuned ok
+mysql: [Warning] Using a password on the command line interface can be insecure.
+csharp w=1 t=16-stock ok
+mysql: [Warning] Using a password on the command line interface can be insecure.
+csharp w=1 t=16-tuned ok
+csharp w=2 t=16-stock ok
+csharp w=2 t=16-tuned ok
+mysql: [Warning] Using a password on the command line interface can be insecure.
+csharp w=1 t=32-stock ok
+mysql: [Warning] Using a password on the command line interface can be insecure.
+csharp w=1 t=32-tuned ok
+csharp w=2 t=32-stock ok
+csharp w=2 t=32-tuned ok
+mysql: [Warning] Using a password on the command line interface can be insecure.
+csharp w=1 t=64-stock ok
+mysql: [Warning] Using a password on the command line interface can be insecure.
+csharp w=1 t=64-tuned ok
+csharp w=2 t=64-stock ok
+csharp w=2 t=64-tuned ok
+mysql: [Warning] Using a password on the command line interface can be insecure.
+csharp w=1 t=128-stock ok
+mysql: [Warning] Using a password on the command line interface can be insecure.
+csharp w=1 t=128-tuned ok
+csharp w=2 t=128-stock ok
+csharp w=2 t=128-tuned ok
+mysql: [Warning] Using a password on the command line interface can be insecure.
+csharp w=1 t=256-stock ok
+mysql: [Warning] Using a password on the command line interface can be insecure.
+csharp w=1 t=256-tuned ok
+csharp w=2 t=256-stock ok
+csharp w=2 t=256-tuned ok
+mysql: [Warning] Using a password on the command line interface can be insecure.
+csharp w=1 t=512-stock ok
+mysql: [Warning] Using a password on the command line interface can be insecure.
+csharp w=1 t=512-tuned ok
+csharp w=2 t=512-stock ok
+csharp w=2 t=512-tuned ok

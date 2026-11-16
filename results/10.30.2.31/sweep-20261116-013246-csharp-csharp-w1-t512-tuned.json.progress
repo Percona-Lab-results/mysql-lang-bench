@@ -1,0 +1,1 @@
+{"workload":1,"workload_name":"int-insert","unit":"rows/s","threads":512,"ops":25289780,"elapsed_s":290.052,"throughput":87190.5,"partial":true}
