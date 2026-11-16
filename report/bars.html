@@ -430,6 +430,25 @@ const PAGE_BARS = true;
     const BH = TOP + ROWS * RH;
     const OFF = 6, BARW = 3 * OFF, CHW = 5;   // bar width = 3x the step; each shorter bar shifted right by OFF
     const svg = el("svg", { viewBox: `0 0 ${BW} ${BH}`, role: "img", "aria-label": cfg.ariaLabel });
+    // Soft shadow a shorter bar casts leftward onto the taller bar beneath it.
+    const shId = `rk-sh-${cfg.hostId}`;
+    { const defs = el("defs", {});
+      const g = el("linearGradient", { id: shId, x1: "0", y1: "0", x2: "1", y2: "0" });
+      const s0 = el("stop", { offset: "0", "stop-color": "#000", "stop-opacity": "0" });
+      const s1 = el("stop", { offset: "1", "stop-color": "#000", "stop-opacity": "0.22" });
+      g.append(s0, s1); defs.appendChild(g); svg.appendChild(defs); }
+    // Heat-map colour by performance within the column (same rule as bars.html):
+    // wide spread (>50%) -> green..red by rank; tight group -> hue shifts only by
+    // each bar's shortfall from the column's best (red at a 50% deficit).
+    const heat = (vals) => {
+      const n = vals.length, best = vals[0], worst = vals[n - 1];
+      const byRank = best > 0 && (best - worst) / best > 0.5;
+      return vals.map((v, j) => {
+        const hue = byRank ? 120 * (1 - (n > 1 ? j / (n - 1) : 0))
+                           : 120 * (1 - Math.min(best > 0 ? (best - v) / best : 0, 0.5) / 0.5);
+        return `hsl(${hue.toFixed(1)}, 66%, 45%)`;
+      });
+    };
     const step = cfg.yMax / 5;
     T.forEach((t, ti) => {
       const c = ti % COLS, r = Math.floor(ti / COLS);
@@ -449,11 +468,16 @@ const PAGE_BARS = true;
       svg.appendChild(el("line", { x1: bx0 - 6, x2: bx0 + GW + 6, y1: pb, y2: pb, stroke: "var(--baseline)", "stroke-width": 1 }));
       // Flat equal-width bars, tallest first; each shorter one drawn on top,
       // shifted OFF px right, so the height differences read as a staircase.
+      const cols = heat(ranked.map(e => e.v));
+      ranked.forEach((e, j) => { e.col = cols[j]; });
       const tops = [];
       ranked.forEach((e, j) => {
         const yt = Y(e.v), h = Math.max(1, pb - yt);
         const w = BARW, bx = bx0 + j * OFF;
-        const bar = el("rect", { x: bx, y: yt, width: w, height: h, fill: e.it.st.color });
+        if (j > 0) {   // shadow onto the taller bar to the left, along this bar's height
+          svg.appendChild(el("rect", { x: bx - 4, y: yt, width: 4, height: h, fill: `url(#${shId})` }));
+        }
+        const bar = el("rect", { x: bx, y: yt, width: w, height: h, fill: e.col });
         bar.style.cursor = "crosshair";
         bar.addEventListener("pointerenter", ev => showBar(ev, t, e.it, e.v, cfg.unit));
         bar.addEventListener("pointermove", moveTip);
@@ -473,9 +497,9 @@ const PAGE_BARS = true;
         const tp = tops[j], cxn = chanX[j], y2 = ly(j);
         const p = el("path", { d: `M ${tp.x.toFixed(1)} ${tp.y.toFixed(1)} H ${cxn.toFixed(1)} V ${y2.toFixed(1)} H ${(labelX - 5).toFixed(1)}`,
                                 fill: "none", "stroke-width": 0.9, "stroke-linejoin": "miter", "stroke-opacity": "0.85" });
-        p.style.stroke = e.it.st.color; svg.appendChild(p);
+        p.style.stroke = e.col; svg.appendChild(p);
         const lab = el("text", { x: labelX, y: y2 + 3.5, class: "ranklab" });
-        lab.style.fill = e.it.st.color; lab.textContent = `${j + 1}. ${e.it.name}  ${fmt(e.v)}`; svg.appendChild(lab);
+        lab.style.fill = e.col; lab.textContent = `${j + 1}. ${e.it.name}  ${fmt(e.v)}`; svg.appendChild(lab);
       });
     });
     const host = document.getElementById(cfg.hostId); if (host) host.appendChild(svg);
