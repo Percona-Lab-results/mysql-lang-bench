@@ -21,6 +21,7 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parent.parent
 OUT = ROOT / "report" / "report.html"
 BARS_OUT = ROOT / "report" / "bars.html"
+ANN_OUT = ROOT / "report" / "annotated.html"
 INFO_OUT = ROOT / "report" / "infographic.html"
 PNG_DIR = ROOT / "report" / "png"
 
@@ -288,8 +289,10 @@ def main():
 
     line_sections = ""
     bar_sections = ""
+    ann_sections = ""
     png_line = []   # sid
     png_bars = []   # (sid, n_default_series, n_optimized_series, n_groups)
+    png_ann = []    # sid (annotated line charts, taller)
     for w in (1, 2, 3, 4):
         if w not in workloads:
             continue
@@ -317,6 +320,14 @@ def main():
     <p class="sub">Client-side CPU consumed per operation (the benchmark process, user+sys), in microseconds of CPU per {'row' if w in (1,2) else 'blob'}, one line per language. Lower is cheaper. The MySQL server's own CPU is excluded — it is essentially the same per transaction across languages, so this isolates each language/driver's own CPU cost.</p>
     <div class="legend" id="legend-{sid}-cpu"></div>
     <div class="bigchart" id="chart-{sid}-cpu"></div>
+  </section>"""
+        png_ann.append(f"{sid}-ann")
+        ann_sections += f"""
+  <section id="sec-{sid}-ann">
+    <h2>{m['title']} — every point labelled</h2>
+    <p class="sub">Same throughput curves ({m['unit']}) as the main chart, but every data point carries its language and score, written in the gap to the right of the node and level with its value. Where points sit too close together the labels are spread apart and a thin line points from each node to its label.</p>
+    <div class="legend" id="legend-{sid}-ann"></div>
+    <div class="bigchart" id="chart-{sid}-ann"></div>
   </section>"""
         bar_sections += f"""
   <section id="sec-{sid}-bars">
@@ -350,12 +361,19 @@ def main():
         "MySQL client benchmark — four micro-workloads by language",
         "MySQL client benchmark — four micro-workloads by language",
         '<a class="navlink" href="infographic.html">Summary &rarr;</a>'
+        '<a class="navlink" href="annotated.html">Annotated &rarr;</a>'
         '<a class="navlink" href="bars.html">Bar charts &rarr;</a>')
     render_page(
         BARS_OUT, bar_sections, True,
         "MySQL client benchmark — bar charts by worker count",
         "MySQL client benchmark — bar charts by worker count",
         '<a class="navlink" href="report.html">&larr; Line charts &amp; tables</a>')
+    render_page(
+        ANN_OUT, ann_sections, False,
+        "MySQL client benchmark — annotated line charts",
+        "MySQL client benchmark — every data point labelled",
+        '<a class="navlink" href="report.html">&larr; Line charts &amp; tables</a>'
+        '<a class="navlink" href="bars.html">Bar charts &rarr;</a>')
 
     # Infographic summary page.
     info_html = INFOGRAPHIC_TEMPLATE
@@ -416,6 +434,10 @@ def main():
     # groups) so the bottom (4-worker) group is never cropped.
     for sid, n_def, n_opt, ng in png_bars:
         shoot(PNG_DIR / f"{sid}.png", f"file://{BARS_OUT}#png-{sid}", bar_px_h(n_def, ng))
+    # Annotated line charts: taller SVG (viewBox 1120x760) so per-node labels fit.
+    ann_h = int(round(RENDER_W * 760 / 1120 + 230))
+    for sid in png_ann:
+        shoot(PNG_DIR / f"{sid}.png", f"file://{ANN_OUT}#png-{sid}", ann_h)
     # Infographic summary: full static page — header + stats + legend, then one
     # stacked heatmap panel per workload (a 27px row per language + chrome).
     info_h = 420 + sum(len(m["series"]) * 27 + 118 for m in workloads.values())
@@ -485,6 +507,8 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
   svg .grouplabel { fill: var(--text-secondary); font-weight: 700; font-size: 11.5px; }
   svg .barval { fill: var(--muted); font-size: 9.5px; }
   svg .barvalin { fill: #ffffff; font-size: 9.5px; font-weight: 600; }
+  svg .nodelabel { font-size: 9.5px; font-weight: 650; paint-order: stroke; stroke: var(--surface-1);
+    stroke-width: 3px; stroke-linejoin: round; }
   #tooltip { position: fixed; pointer-events: none; z-index: 10; display: none;
     background: var(--surface-1); border: 1px solid var(--border); border-radius: 8px;
     box-shadow: 0 4px 14px rgba(0,0,0,0.18); padding: 8px 11px; font-size: 12.5px; min-width: 150px; }
@@ -649,7 +673,7 @@ const PAGE_BARS = __PAGE_BARS__;
   function bigChart(cfg) {
     const T = cfg.T, N = T.length;
     const FY = cfg.fmtY || fmt;   // y-axis + end-label number format
-    const BW = 1120, BH = 540, BM = { l: 64, r: 184, t: 14, b: 32 };
+    const BW = 1120, BH = cfg.height || 540, BM = { l: 64, r: 184, t: 14, b: 32 };
     const BIW = BW-BM.l-BM.r, BIH = BH-BM.t-BM.b;
     const X = i => BM.l + i*BIW/(N-1);
     const Y = v => BM.t + BIH - (v/cfg.yMax)*BIH;
@@ -689,6 +713,36 @@ const PAGE_BARS = __PAGE_BARS__;
       for (let i=0;i<N;i++){ if (d.vals[i]==null) continue; slayer.appendChild(shapeNode(d.st.shape, X(i), Y(d.vals[i]), d.st.color, "var(--surface-1)")); }
     }
     svg.appendChild(slayer);
+    // Per-node annotations: in the horizontal gap to the right of each worker
+    // count, write "<language> <score>" level with that node's Y. Labels that
+    // would overlap are pushed apart (min GAPN px) and kept inside the plot; a
+    // label that had to move away from its node gets a thin leader line from
+    // the node to the label. The last node keeps the end-label treatment below.
+    if (cfg.nodeLabels) {
+      const GAPN = 11.5;
+      for (let i = 0; i < N-1; i++) {
+        const items = cfg.seriesDefs.filter(d => d.vals[i] != null)
+          .map(d => ({ d, y0: Y(d.vals[i]), y: Y(d.vals[i]) }));
+        items.sort((a, b) => a.y - b.y);
+        for (let k = 1; k < items.length; k++) if (items[k].y - items[k-1].y < GAPN) items[k].y = items[k-1].y + GAPN;
+        const over = items.length ? items[items.length-1].y - (BM.t + BIH - 2) : 0;
+        if (over > 0) for (const L of items) L.y -= over;
+        const topOver = items.length ? (BM.t + 5) - items[0].y : 0;
+        if (topOver > 0) { items[0].y += topOver;
+          for (let k = 1; k < items.length; k++) if (items[k].y - items[k-1].y < GAPN) items[k].y = items[k-1].y + GAPN; }
+        const lx = X(i) + 10;
+        for (const L of items) {
+          if (Math.abs(L.y - L.y0) > 2.5) {
+            const ldr = el("line", { x1: X(i)+6.5, y1: L.y0, x2: lx-2, y2: L.y, "stroke-width": 0.9, "stroke-opacity": "0.6" });
+            ldr.style.stroke = L.d.st.color; svg.appendChild(ldr);
+          }
+          const t = el("text", { x: lx, y: L.y + 3.3, class: "nodelabel" });
+          t.style.fill = L.d.st.color;
+          t.textContent = L.d.name + " " + FY(L.d.vals[i]);
+          svg.appendChild(t);
+        }
+      }
+    }
     const labels = cfg.seriesDefs.map(d => { const li = lastIdxOf(d.vals); const yy = Y(d.vals[li]); return { d, li, endY: yy, y: yy }; });
     labels.sort((a,b)=>a.y-b.y);
     const GAPL = 16;
@@ -867,6 +921,15 @@ const PAGE_BARS = __PAGE_BARS__;
       peak: peak, unit: M.unit, sortGroup: PAGE_BARS, labelName: PAGE_BARS,
       ariaLabel: `${M.title}: throughput grouped by worker count`,
     });
+    // Annotated line chart (annotated.html): every node labelled in the gap.
+    if (document.getElementById(`chart-w${w}-ann`)) {
+      legendInto(`legend-w${w}-ann`, shown.map(s => ({ name: labelOf(s), key: keySVG(stOf(s), 26, 12) })));
+      bigChart({
+        hostId: `chart-w${w}-ann`, T: M.threads, seriesDefs: defs,
+        yMax: niceMax(peak), unit: M.unit, nodeLabels: true, height: 760,
+        ariaLabel: `${M.title}: throughput by worker count, every point labelled`,
+      });
+    }
     // Client CPU-cost line chart (us of benchmark-process CPU per operation).
     if (document.getElementById(`chart-w${w}-cpu`)) {
       const cdefs = shown.filter(s => s.cpu && s.cpu.some(v => v != null))
