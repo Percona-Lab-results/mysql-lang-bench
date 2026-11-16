@@ -287,6 +287,7 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
     --text-primary: #0b0b0b; --text-secondary: #52514e; --muted: #898781;
     --grid: #e1e0d9; --baseline: #c3c2b7; --band: #898781;
     --border: rgba(11,11,11,0.10);
+    --card-shadow: inset 0 1px 0 rgba(255,255,255,0.7), 0 1px 2px rgba(17,17,17,0.04), 0 14px 32px -12px rgba(17,17,17,0.16);
     __CAT_LIGHT__
   }
   @media (prefers-color-scheme: dark) {
@@ -296,6 +297,7 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
       --text-primary: #f0efec; --text-secondary: #c3c2b7; --muted: #898781;
       --grid: #2c2c2a; --baseline: #383835; --band: #898781;
       --border: rgba(255,255,255,0.10);
+      --card-shadow: inset 0 1px 0 rgba(255,255,255,0.06), 0 1px 2px rgba(0,0,0,0.5), 0 16px 34px -12px rgba(0,0,0,0.7);
       __CAT_DARK__
     }
   }
@@ -305,6 +307,7 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
     --text-primary: #f0efec; --text-secondary: #c3c2b7; --muted: #898781;
     --grid: #2c2c2a; --baseline: #383835; --band: #898781;
     --border: rgba(255,255,255,0.10);
+    --card-shadow: inset 0 1px 0 rgba(255,255,255,0.06), 0 1px 2px rgba(0,0,0,0.5), 0 16px 34px -12px rgba(0,0,0,0.7);
     __CAT_DARK__
   }
   * { box-sizing: border-box; }
@@ -317,15 +320,16 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
   .controls { display: flex; gap: 12px; align-items: center; flex-wrap: wrap; }
   #theme-toggle { border: 1px solid var(--border); background: var(--surface-1);
     color: var(--text-secondary); border-radius: 8px; padding: 6px 12px; cursor: pointer; font: inherit; font-size: 13px; }
-  section { margin-top: 34px; }
-  h2 { font-size: 16px; margin: 0 0 2px; }
+  section { margin-top: 42px; }
+  h2 { font-size: 16.5px; font-weight: 650; letter-spacing: -0.01em; margin: 0 0 3px; }
   .sub { color: var(--text-secondary); margin: 0 0 14px; max-width: 80ch; }
-  .legend { display: flex; gap: 16px; align-items: center; margin: 0 0 10px; color: var(--text-secondary); font-size: 13px; flex-wrap: wrap; }
+  .legend { display: flex; gap: 14px 18px; align-items: center; margin: 0 0 12px; color: var(--text-secondary); font-size: 13px; flex-wrap: wrap; }
   .legend .item { display: inline-flex; align-items: center; gap: 6px; }
   .legend svg, #tooltip svg { display: inline-block; vertical-align: middle; }
   .legend .perfscale { width: 150px; height: 11px; border-radius: 6px;
     background: linear-gradient(90deg, hsl(120,66%,45%), hsl(60,66%,47%), hsl(0,66%,47%)); }
-  .bigchart { background: var(--surface-1); border: 1px solid var(--border); border-radius: 10px; padding: 14px 16px 8px; }
+  .bigchart { background: var(--surface-1); border: 1px solid var(--border);
+    border-radius: 14px; padding: 16px 18px 10px; box-shadow: var(--card-shadow); }
   .bigchart svg { display: block; width: 100%; height: auto; }
   .bigchart svg:focus { outline: 2px solid var(--cat-1); outline-offset: 2px; border-radius: 4px; }
   svg text { font-family: inherit; font-size: 10.5px; fill: var(--muted); font-variant-numeric: tabular-nums; }
@@ -358,6 +362,11 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
 </style>
 </head>
 <body class="viz-root">
+<svg width="0" height="0" style="position:absolute" aria-hidden="true"><defs>
+  <filter id="chart-shadow" x="-10%" y="-20%" width="120%" height="140%">
+    <feDropShadow dx="0" dy="0.8" stdDeviation="1.1" flood-color="#000" flood-opacity="0.18"/>
+  </filter>
+</defs></svg>
 <div class="wrap">
   <header class="page">
     <div>
@@ -522,13 +531,16 @@ const PAGE_BARS = __PAGE_BARS__;
       for (let i=0;i<N;i++){ if (vals[i]==null){pen=false;continue;}
         d += (pen?"L":"M")+X(i).toFixed(1)+" "+Y(vals[i]).toFixed(1)+" "; pen=true; } return d.trim(); };
     const lastIdxOf = vals => { for (let i=N-1;i>=0;i--) if (vals[i]!=null) return i; return N-1; };
+    // Series (lines + markers) share a soft drop shadow so they lift off the grid.
+    const slayer = el("g", { filter: "url(#chart-shadow)" });
     for (let si=cfg.seriesDefs.length-1; si>=0; si--) {
       const d = cfg.seriesDefs[si];
-      const lp = el("path", { d: path(d.vals), fill: "none", stroke: d.st.color, "stroke-width": 2, "stroke-linejoin": "round", "stroke-linecap": "round" });
+      const lp = el("path", { d: path(d.vals), fill: "none", stroke: d.st.color, "stroke-width": 2.4, "stroke-linejoin": "round", "stroke-linecap": "round" });
       if (d.st.dash) lp.setAttribute("stroke-dasharray", "7 5");
-      svg.appendChild(lp);
-      for (let i=0;i<N;i++){ if (d.vals[i]==null) continue; svg.appendChild(shapeNode(d.st.shape, X(i), Y(d.vals[i]), d.st.color, "var(--surface-1)")); }
+      slayer.appendChild(lp);
+      for (let i=0;i<N;i++){ if (d.vals[i]==null) continue; slayer.appendChild(shapeNode(d.st.shape, X(i), Y(d.vals[i]), d.st.color, "var(--surface-1)")); }
     }
+    svg.appendChild(slayer);
     const labels = cfg.seriesDefs.map(d => { const li = lastIdxOf(d.vals); const yy = Y(d.vals[li]); return { d, li, endY: yy, y: yy }; });
     labels.sort((a,b)=>a.y-b.y);
     const GAPL = 16;
