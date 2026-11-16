@@ -328,7 +328,7 @@ def main():
         rank_sections += f"""
   <section id="sec-{sid}-rank">
     <h2>{m['title']} — ranked</h2>
-    <p class="sub">One column per worker count. In each column the languages are overlapping bars ({m['unit']}) of equal width, tallest first: each next-slower language is drawn on top and stepped a few pixels to the right, so the height difference between neighbours stays visible as a staircase (where neighbours are within a couple of pixels, bar heights are nudged apart slightly; the labels show the true values). Bars are coloured by language type &mdash; native, managed VM, or interpreted/scripting (legend at top). Beside the bars the languages are listed by rank, evenly spaced, each joined to its bar top by a thin right-angled connector. All columns share one scale.</p>
+    <p class="sub">One column per worker count. In each column the languages are overlapping bars ({m['unit']}) of equal width, tallest first: each next-slower language is drawn on top and stepped a few pixels to the right, so the height difference between neighbours stays visible as a staircase (where neighbours are within a couple of pixels, bar heights are nudged apart slightly; the labels show the true values). Bars are coloured by language type &mdash; native, managed VM, or interpreted/scripting (legend at top) &mdash; with the shade graded by rank: a better performer is more saturated and slightly darker, a slower one is washed out. Beside the bars the languages are listed by rank, evenly spaced, each joined to its bar top by a thin right-angled connector. All columns share one scale.</p>
     <div class="bigchart" id="chart-{sid}-rank"></div>
   </section>"""
         png_ann.append(f"{sid}-ann")
@@ -894,9 +894,17 @@ const PAGE_BARS = __PAGE_BARS__;
     const LTYPE = { c: "native", cpp: "native", rust: "native", go: "native", swift: "native",
                     java: "managed", csharp: "managed",
                     python: "interp", php: "interp", ruby: "interp", lua: "interp", javascript: "interp", typescript: "interp" };
-    const TCOL = { native: "var(--cat-1)", managed: "var(--cat-2)", interp: "var(--cat-3)" };
+    // Type hues (matching palette slots 1-3). Within a column the shade is graded
+    // by rank: the best performer is more saturated and slightly darker, the
+    // slowest is washed out and lighter.
+    const THUE = { native: 212, managed: 17, interp: 158 };
+    const shade = (type, t) => {   // t = 0 (best) .. 1 (worst)
+      const s = 88 - 50 * t, l = 38 + 26 * t;
+      return `hsl(${THUE[type]}, ${s.toFixed(0)}%, ${l.toFixed(0)}%)`;
+    };
+    const TCOL = { native: shade("native", 0.15), managed: shade("managed", 0.15), interp: shade("interp", 0.15) };
     const TNAME = { native: "native (C, C++, Rust, Go, Swift)", managed: "managed VM (Java, C#)", interp: "interpreted / scripting (Python, PHP, Ruby, Lua, JS, TS)" };
-    const typeCol = it => TCOL[LTYPE[it.lang] || "interp"];
+    const typeCol = (it, t) => shade(LTYPE[it.lang] || "interp", t);
     // Legend along the top.
     { let lx = ML; for (const k of ["native", "managed", "interp"]) {
         svg.appendChild(el("rect", { x: lx, y: 0, width: 14, height: 11, fill: TCOL[k] }));
@@ -921,7 +929,7 @@ const PAGE_BARS = __PAGE_BARS__;
       svg.appendChild(el("line", { x1: bx0 - 6, x2: bx0 + GW + 6, y1: pb, y2: pb, stroke: "var(--baseline)", "stroke-width": 1 }));
       // Flat equal-width bars, tallest first; each shorter one drawn on top,
       // shifted OFF px right, so the height differences read as a staircase.
-      ranked.forEach(e => { e.col = typeCol(e.it); });
+      ranked.forEach((e, j) => { e.col = typeCol(e.it, n > 1 ? j / (n - 1) : 0); });
       // Visual nudge: neighbouring bars whose tops would be closer than MINGAP
       // px are pushed apart (shorter one down, cascading) so every step stays
       // visible; if the cascade would run past the baseline the whole stack is
