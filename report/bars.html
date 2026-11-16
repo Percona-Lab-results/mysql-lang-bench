@@ -41,11 +41,6 @@
   .controls { display: flex; gap: 12px; align-items: center; flex-wrap: wrap; }
   #theme-toggle { border: 1px solid var(--border); background: var(--surface-1);
     color: var(--text-secondary); border-radius: 8px; padding: 6px 12px; cursor: pointer; font: inherit; font-size: 13px; }
-  .kpis { display: grid; grid-template-columns: repeat(auto-fit, minmax(210px, 1fr)); gap: 12px; margin: 22px 0 8px; }
-  .tile { background: var(--surface-1); border: 1px solid var(--border); border-radius: 10px; padding: 14px 16px; }
-  .tile-label { color: var(--text-secondary); font-size: 13px; }
-  .tile-value { font-size: 23px; font-weight: 600; margin-top: 2px; }
-  .tile-sub { color: var(--muted); font-size: 12px; margin-top: 2px; }
   section { margin-top: 34px; }
   h2 { font-size: 16px; margin: 0 0 2px; }
   .sub { color: var(--text-secondary); margin: 0 0 14px; max-width: 80ch; }
@@ -80,7 +75,7 @@
   .navlink { color: var(--cat-1); text-decoration: none; font-size: 13px; font-weight: 600; align-self: center; }
   .navlink:hover { text-decoration: underline; }
   footer { color: var(--muted); font-size: 12px; margin-top: 30px; max-width: 86ch; }
-  body.pngmode header.page, body.pngmode .kpis, body.pngmode footer, body.pngmode section { display: none; }
+  body.pngmode header.page, body.pngmode footer, body.pngmode section { display: none; }
   body.pngmode section.png-show { display: block; margin-top: 0; }
   body.pngmode section.png-show details.tables { display: none; }
   body.pngmode .wrap { padding: 16px 20px; }
@@ -104,10 +99,6 @@
     </div>
   </header>
 
-  <div class="kpis"><div class="tile"><div class="tile-label">integer insert</div><div class="tile-value">211,654 rows/s</div><div class="tile-sub">best: Go</div></div>
-<div class="tile"><div class="tile-label">integer fetch + sum</div><div class="tile-value">27.33M rows/s</div><div class="tile-sub">best: Rust</div></div>
-<div class="tile"><div class="tile-label">blob insert + MD5</div><div class="tile-value">403 blobs/s</div><div class="tile-sub">best: Go</div></div>
-<div class="tile"><div class="tile-label">blob read + MD5</div><div class="tile-value">8,066 blobs/s</div><div class="tile-sub">best: Lua</div></div></div>
 
   <section id="sec-w1-bars">
     <h2>Workload 1 — integer insert — grouped by worker count</h2>
@@ -454,6 +445,32 @@ const PAGE_BARS = true;
       (!r.getAttribute("data-theme") && matchMedia("(prefers-color-scheme: dark)").matches);
     r.setAttribute("data-theme", dark ? "light" : "dark");
   });
+
+  // Deep-linking: ?workload=N focuses a workload's section; ?table=1 also opens
+  // that workload's table view. Opening/closing a table updates the URL so it
+  // can be copied/shared, and on load we scroll to the targeted place.
+  const secIdFor = n => PAGE_BARS ? `sec-w${n}-bars` : `sec-w${n}`;
+  if (!pngMatch) {
+    const q = new URLSearchParams(location.search);
+    const wl = parseInt(q.get("workload") || "", 10);
+    const tableOn = q.get("table") === "1";
+    const tbl = (!PAGE_BARS && wl >= 1) ? document.getElementById(`tables-w${wl}`) : null;
+    if (tableOn && tbl) {
+      tbl.open = true;
+      requestAnimationFrame(() => tbl.scrollIntoView({ block: "start" }));
+    } else if (wl >= 1) {
+      const sec = document.getElementById(secIdFor(wl));
+      if (sec) requestAnimationFrame(() => sec.scrollIntoView({ block: "start" }));
+    }
+  }
+  for (const d of document.querySelectorAll("details.tables")) {
+    d.addEventListener("toggle", () => {
+      const q = new URLSearchParams(location.search);
+      q.set("workload", d.getAttribute("data-workload"));
+      q.set("table", d.open ? "1" : "0");
+      history.replaceState(null, "", location.pathname + "?" + q.toString() + location.hash);
+    });
+  }
 })();
 </script>
 </body>

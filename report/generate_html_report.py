@@ -147,20 +147,6 @@ def main():
         sys.exit(1)
 
     langs = sorted({s["lang"] for w in workloads.values() for s in w["series"]})
-    kpis = []
-    for w in (1, 2, 3, 4):
-        if w not in workloads:
-            continue
-        mv = [s for s in workloads[w]["series"] if s["variant"] in ("na", "stock")]
-        best = max(mv, key=lambda s: s["peak"])
-        unit = workloads[w]["unit"]
-        val = f"{best['peak']/1e6:.2f}M" if best["peak"] >= 1e6 else f"{best['peak']:,.0f}"
-        kpis.append((WL[w][0].split("—")[1].strip(), f"{val} {unit}",
-                     f"best: {best['name']}"))
-    kpi_html = "\n".join(
-        f'<div class="tile"><div class="tile-label">{l}</div>'
-        f'<div class="tile-value">{v}</div><div class="tile-sub">{s}</div></div>'
-        for l, v, s in kpis)
 
     line_sections = ""
     bar_sections = ""
@@ -175,8 +161,9 @@ def main():
         n_def = len([s for s in m["series"] if s["variant"] != "tuned"])
         n_opt = len([s for s in m["series"] if s["lang"] in ("go", "csharp")])
         png_bars.append((f"{sid}-bars", n_def, n_opt, len(m["threads"])))
-        tabs = ('<details class="tables"><summary>Table view — throughput ('
-                + m["unit"] + ')</summary><div class="tablewrap">'
+        tabs = (f'<details class="tables" id="tables-{sid}" data-workload="{w}">'
+                '<summary>Table view — throughput (' + m["unit"]
+                + ')</summary><div class="tablewrap">'
                 + table(m["series"], m["threads"]) + '</div></details>')
         line_sections += f"""
   <section id="sec-{sid}">
@@ -200,7 +187,6 @@ def main():
         html = HTML_TEMPLATE
         for k, v in {
             "__DATA__": data_json,
-            "__KPIS__": kpi_html,
             "__SECTIONS__": sections,
             "__NLANG__": str(len(langs)),
             "__PAGE_BARS__": "true" if page_bars else "false",
@@ -313,11 +299,6 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
   .controls { display: flex; gap: 12px; align-items: center; flex-wrap: wrap; }
   #theme-toggle { border: 1px solid var(--border); background: var(--surface-1);
     color: var(--text-secondary); border-radius: 8px; padding: 6px 12px; cursor: pointer; font: inherit; font-size: 13px; }
-  .kpis { display: grid; grid-template-columns: repeat(auto-fit, minmax(210px, 1fr)); gap: 12px; margin: 22px 0 8px; }
-  .tile { background: var(--surface-1); border: 1px solid var(--border); border-radius: 10px; padding: 14px 16px; }
-  .tile-label { color: var(--text-secondary); font-size: 13px; }
-  .tile-value { font-size: 23px; font-weight: 600; margin-top: 2px; }
-  .tile-sub { color: var(--muted); font-size: 12px; margin-top: 2px; }
   section { margin-top: 34px; }
   h2 { font-size: 16px; margin: 0 0 2px; }
   .sub { color: var(--text-secondary); margin: 0 0 14px; max-width: 80ch; }
@@ -352,7 +333,7 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
   .navlink { color: var(--cat-1); text-decoration: none; font-size: 13px; font-weight: 600; align-self: center; }
   .navlink:hover { text-decoration: underline; }
   footer { color: var(--muted); font-size: 12px; margin-top: 30px; max-width: 86ch; }
-  body.pngmode header.page, body.pngmode .kpis, body.pngmode footer, body.pngmode section { display: none; }
+  body.pngmode header.page, body.pngmode footer, body.pngmode section { display: none; }
   body.pngmode section.png-show { display: block; margin-top: 0; }
   body.pngmode section.png-show details.tables { display: none; }
   body.pngmode .wrap { padding: 16px 20px; }
@@ -376,7 +357,6 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
     </div>
   </header>
 
-  <div class="kpis">__KPIS__</div>
 __SECTIONS__
   <footer>
     Per-worker counts (work scales with worker count); barrier-synchronized timing;
@@ -699,6 +679,32 @@ const PAGE_BARS = __PAGE_BARS__;
       (!r.getAttribute("data-theme") && matchMedia("(prefers-color-scheme: dark)").matches);
     r.setAttribute("data-theme", dark ? "light" : "dark");
   });
+
+  // Deep-linking: ?workload=N focuses a workload's section; ?table=1 also opens
+  // that workload's table view. Opening/closing a table updates the URL so it
+  // can be copied/shared, and on load we scroll to the targeted place.
+  const secIdFor = n => PAGE_BARS ? `sec-w${n}-bars` : `sec-w${n}`;
+  if (!pngMatch) {
+    const q = new URLSearchParams(location.search);
+    const wl = parseInt(q.get("workload") || "", 10);
+    const tableOn = q.get("table") === "1";
+    const tbl = (!PAGE_BARS && wl >= 1) ? document.getElementById(`tables-w${wl}`) : null;
+    if (tableOn && tbl) {
+      tbl.open = true;
+      requestAnimationFrame(() => tbl.scrollIntoView({ block: "start" }));
+    } else if (wl >= 1) {
+      const sec = document.getElementById(secIdFor(wl));
+      if (sec) requestAnimationFrame(() => sec.scrollIntoView({ block: "start" }));
+    }
+  }
+  for (const d of document.querySelectorAll("details.tables")) {
+    d.addEventListener("toggle", () => {
+      const q = new URLSearchParams(location.search);
+      q.set("workload", d.getAttribute("data-workload"));
+      q.set("table", d.open ? "1" : "0");
+      history.replaceState(null, "", location.pathname + "?" + q.toString() + location.hash);
+    });
+  }
 })();
 </script>
 </body>
