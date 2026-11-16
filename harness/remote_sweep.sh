@@ -34,21 +34,13 @@ for L in $LANGS; do
     fail=0
     for N in $BENCH_THREADS_LIST; do
         for W in $BENCH_WORKLOADS; do
-            # Go and C# run stock + tuned; everyone else runs once.
-            case "$L" in
-                go|csharp) VARIANTS="0 1" ;;
-                *)         VARIANTS="-" ;;
-            esac
-            for V in $VARIANTS; do
-                # Fresh table before EACH insert run (reads keep the data).
-                # Must be per-variant: go/csharp run an insert cell twice, and
-                # the blob table has a PRIMARY KEY, so a second un-truncated
-                # run would hit duplicate-key on the same ids.
+            # Every language runs once (the tuned/optimized Go and C# variant was
+            # removed). Keep a single-iteration loop so the body is unchanged.
+            for V in "-"; do
+                # Fresh table before each insert run (reads keep the data).
                 if [ "$W" = 1 ]; then "${MYSQL[@]}" -e "TRUNCATE bench_int;"  >> "$LOG" 2>&1; fi
                 if [ "$W" = 3 ]; then "${MYSQL[@]}" -e "TRUNCATE bench_blob;" >> "$LOG" 2>&1; fi
                 suffix=""; tuned="null"
-                if [ "$V" = 0 ]; then suffix="-stock"; tuned="false"; fi
-                if [ "$V" = 1 ]; then suffix="-tuned"; tuned="true";  fi
                 OUT="results/$SWEEP_ID-$L-w$W-t$N$suffix.json"
                 CPUF="results/.cpu.$$"
                 echo "RUNNING $L w=$W t=$N${suffix}" > "$STATUS"

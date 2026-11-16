@@ -7,10 +7,8 @@ Two HTML pages share one template and dataset:
     groups stacked 512-on-top down to 4, bars sorted best->worst within each
     group and labelled "<throughput> - <language>".
 
-Go and C# carry a stock and a tuned run; the "Show optimized Go/C#" toggle
-(URL ?optimized=0|1, default 0) switches both pages between all-languages/stock
-and a Go+C#-only stock-vs-optimized focus, reloading on change. Every chart is
-also exported as a light-mode PNG (default and optimized variants) into
+Go and C# are run both stock and tuned, but only the stock curve is shown (one
+curve per language). Every chart is exported as a light-mode PNG into
 report/png/; bar PNGs are sized to their content so no group is cropped.
 """
 import json
@@ -266,12 +264,10 @@ def main():
     line_h = int(round(RENDER_W * 540 / 1120 + 200))
     for sid in png_line:
         shoot(PNG_DIR / f"{sid}.png", f"file://{OUT}#png-{sid}", line_h)
-        shoot(PNG_DIR / f"{sid}-optimized.png", f"file://{OUT}?optimized=1#png-{sid}", line_h)
     # Bar charts: height sized to the content (one row per language x worker-count
     # groups) so the bottom (4-worker) group is never cropped.
     for sid, n_def, n_opt, ng in png_bars:
         shoot(PNG_DIR / f"{sid}.png", f"file://{BARS_OUT}#png-{sid}", bar_px_h(n_def, ng))
-        shoot(PNG_DIR / f"{sid}-optimized.png", f"file://{BARS_OUT}?optimized=1#png-{sid}", bar_px_h(n_opt, ng))
 
 
 HTML_TEMPLATE = r"""<!DOCTYPE html>
@@ -317,10 +313,6 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
   .controls { display: flex; gap: 12px; align-items: center; flex-wrap: wrap; }
   #theme-toggle { border: 1px solid var(--border); background: var(--surface-1);
     color: var(--text-secondary); border-radius: 8px; padding: 6px 12px; cursor: pointer; font: inherit; font-size: 13px; }
-  .toggle { display: inline-flex; align-items: center; gap: 7px; cursor: pointer;
-    border: 1px solid var(--border); background: var(--surface-1); color: var(--text-secondary);
-    border-radius: 8px; padding: 6px 12px; font-size: 13px; }
-  .toggle input { cursor: pointer; margin: 0; }
   .kpis { display: grid; grid-template-columns: repeat(auto-fit, minmax(210px, 1fr)); gap: 12px; margin: 22px 0 8px; }
   .tile { background: var(--surface-1); border: 1px solid var(--border); border-radius: 10px; padding: 14px 16px; }
   .tile-label { color: var(--text-secondary); font-size: 13px; }
@@ -376,12 +368,10 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
       in-app MD5, read blobs with in-app MD5. __NLANG__ languages, Percona Server 8.4.11 tuned for maximum
       write throughput (no per-commit disk sync), client and server on one 80-core host,
       workers 4&nbsp;&rarr;&nbsp;512, no pre-warming. All languages run on stock runtime
-      defaults; enable <em>Show optimized Go/C#</em> to focus on Go and C# with their
-      stock and tuned-runtime curves.</p>
+      defaults.</p>
     </div>
     <div class="controls">
       __NAV__
-      <label class="toggle"><input type="checkbox" id="opt-toggle"> Show optimized Go/C#</label>
       <button id="theme-toggle" type="button">Toggle dark mode</button>
     </div>
   </header>
@@ -414,23 +404,10 @@ const PAGE_BARS = __PAGE_BARS__;
     if (sec) sec.classList.add("png-show");
   }
 
-  const params = new URLSearchParams(location.search);
-  const showOptimized = params.get("optimized") === "1";
-  const optToggle = document.getElementById("opt-toggle");
-  if (optToggle) {
-    optToggle.checked = showOptimized;
-    optToggle.addEventListener("change", () => {
-      params.set("optimized", optToggle.checked ? "1" : "0");
-      location.search = params.toString();
-    });
-  }
-  // Off: all languages, stock curves. On: only Go and C#, stock + optimized.
-  const showSeries = s => showOptimized
-    ? (s.lang === "go" || s.lang === "csharp")
-    : s.variant !== "tuned";
-  const labelOf = s => s.variant === "tuned" ? s.name + " (optimized)"
-    : (s.variant === "stock" && showOptimized) ? s.name + " (stock)" : s.name;
-  const dashOf = s => s.variant === "tuned";
+  // One curve per language (the tuned/optimized Go and C# runs were removed).
+  const showSeries = s => s.variant !== "tuned";
+  const labelOf = s => s.name;
+  const dashOf = () => false;
 
   const tooltip = document.getElementById("tooltip");
   const fmt = v => v >= 1e6 ? (v / 1e6).toFixed(1) + "M"
