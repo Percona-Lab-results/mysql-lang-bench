@@ -328,7 +328,7 @@ def main():
         rank_sections += f"""
   <section id="sec-{sid}-rank">
     <h2>{m['title']} — ranked</h2>
-    <p class="sub">One column per worker count. In each column the languages are nested bars ({m['unit']}): the fastest language is the outer bar &mdash; tallest and widest &mdash; and each next place sits inside it, narrower, down to the slowest innermost bar. Beside the bars the languages are listed by rank, evenly spaced, each joined to its bar top by a thin right-angled connector. All columns share one scale.</p>
+    <p class="sub">One column per worker count. In each column the languages are overlapping bars ({m['unit']}) of equal width, tallest first: each next-slower language is drawn on top and stepped a few pixels to the right, so the height difference between neighbours stays visible as a staircase. Beside the bars the languages are listed by rank, evenly spaced, each joined to its bar top by a thin right-angled connector. All columns share one scale.</p>
     <div class="bigchart" id="chart-{sid}-rank"></div>
   </section>"""
         png_ann.append(f"{sid}-ann")
@@ -877,7 +877,7 @@ const PAGE_BARS = __PAGE_BARS__;
     const BW = 1400, ML = 58, MR = 14, CW = (BW - ML - MR) / COLS;
     const TITLE_H = 26, PLOT_H = 400, ROW_B = 30, RH = TITLE_H + PLOT_H + ROW_B, TOP = 8;
     const BH = TOP + ROWS * RH;
-    const GW = 84, INNER_MIN = 0.28, CHW = 5;
+    const BARW = 60, OFF = 4, CHW = 5;   // equal bar width; each shorter bar shifted right by OFF
     const svg = el("svg", { viewBox: `0 0 ${BW} ${BH}`, role: "img", "aria-label": cfg.ariaLabel });
     const step = cfg.yMax / 5;
     T.forEach((t, ti) => {
@@ -886,6 +886,9 @@ const PAGE_BARS = __PAGE_BARS__;
       const pt = y0 + TITLE_H, pb = pt + PLOT_H;              // plot top / bottom (baseline)
       const Y = v => pb - (v / cfg.yMax) * PLOT_H;
       const bx0 = x0 + 10;                                     // bar group left
+      // Languages at this worker count, best first.
+      const ranked = items.filter(it => it.vals[ti] != null).map(it => ({ it, v: it.vals[ti] })).sort((a, b) => b.v - a.v);
+      const n = ranked.length, GW = BARW + Math.max(0, n - 1) * OFF;
       // Column title.
       const tt = el("text", { x: bx0, y: y0 + 17, class: "coltitle" }); tt.textContent = `${t} workers`; svg.appendChild(tt);
       // Gridlines behind the bar group; y tick labels once per row (first column).
@@ -893,16 +896,13 @@ const PAGE_BARS = __PAGE_BARS__;
         svg.appendChild(el("line", { x1: bx0 - 6, x2: bx0 + GW + 6, y1: Y(tv), y2: Y(tv), stroke: "var(--grid)", "stroke-width": 1 }));
         if (c === 0) { const yl = el("text", { x: ML - 6, y: Y(tv) + 3.5, "text-anchor": "end" }); yl.textContent = tv === 0 ? "0" : fmt(tv); svg.appendChild(yl); } }
       svg.appendChild(el("line", { x1: bx0 - 6, x2: bx0 + GW + 6, y1: pb, y2: pb, stroke: "var(--baseline)", "stroke-width": 1 }));
-      // Languages at this worker count, best first.
-      const ranked = items.filter(it => it.vals[ti] != null).map(it => ({ it, v: it.vals[ti] })).sort((a, b) => b.v - a.v);
-      const n = ranked.length, cx = bx0 + GW / 2;
+      // Flat equal-width bars, tallest first; each shorter one drawn on top,
+      // shifted OFF px right, so the height differences read as a staircase.
       const tops = [];
       ranked.forEach((e, j) => {
         const yt = Y(e.v), h = Math.max(1, pb - yt);
-        const w = GW * (n > 1 ? 1 - (1 - INNER_MIN) * j / (n - 1) : 1);
-        const bx = cx - w / 2, rr = Math.min(3, w / 2);
-        const bar = el("rect", { x: bx, y: yt, width: w, height: h, rx: rr, ry: rr, fill: e.it.st.color, "fill-opacity": "0.92",
-                                 stroke: "var(--surface-1)", "stroke-width": 0.8 });
+        const w = BARW, bx = bx0 + j * OFF;
+        const bar = el("rect", { x: bx, y: yt, width: w, height: h, fill: e.it.st.color });
         bar.style.cursor = "crosshair";
         bar.addEventListener("pointerenter", ev => showBar(ev, t, e.it, e.v, cfg.unit));
         bar.addEventListener("pointermove", moveTip);
