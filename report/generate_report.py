@@ -2,6 +2,7 @@
 """Merge results/<host>/*.json into markdown tables (stdout), one block per
 workload (v3), plus results/summary.csv."""
 import json
+import os
 import sys
 from collections import defaultdict
 from pathlib import Path
@@ -14,16 +15,25 @@ WL = {1: "Workload 1 — integer insert (rows/s)",
 
 
 def load():
+    # Optional explicit dataset (e.g. a run1/run2 average); see generate_html_report.
+    ds = os.environ.get("BENCH_DATASET")
+    if ds:
+        raw = json.loads(Path(ds).read_text())
+        src = list(raw.values() if isinstance(raw, dict) else raw)
+    else:
+        src = []
+        for f in sorted(ROOT.glob("results/*/*.json")):
+            try:
+                r = json.loads(f.read_text())
+            except (json.JSONDecodeError, OSError):
+                continue
+            r["_run"] = f.stem
+            r["_host"] = f.parent.name
+            src.append(r)
     latest = {}
-    for f in sorted(ROOT.glob("results/*/*.json")):
-        try:
-            r = json.loads(f.read_text())
-        except (json.JSONDecodeError, OSError):
-            continue
+    for r in src:
         if "workload" not in r or "threads" not in r:
             continue
-        r["_run"] = f.stem
-        r["_host"] = f.parent.name
         v = r.get("tuned")
         r["_disp"] = r["lang"] + (" (optimized)" if v is True else " (stock)" if v is False else "")
         latest[(r["workload"], r["lang"], v, r["threads"])] = r

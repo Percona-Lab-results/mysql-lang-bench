@@ -72,6 +72,16 @@ WL = {
 
 
 def load_rows():
+    # Optional explicit dataset (e.g. a precomputed run1/run2 average): a JSON
+    # object whose values are result records. Bypasses the results/ glob so the
+    # report can render a derived dataset. Set BENCH_DATASET to its path.
+    ds = os.environ.get("BENCH_DATASET")
+    if ds:
+        raw = json.loads(Path(ds).read_text())
+        records = raw.values() if isinstance(raw, dict) else raw
+        return {(r["workload"], r["lang"], r.get("tuned"), r["threads"]): r
+                for r in records
+                if all(k in r for k in ("workload", "threads", "throughput", "lang"))}
     latest = {}
     for f in sorted(ROOT.glob("results/*/*.json")):
         try:
