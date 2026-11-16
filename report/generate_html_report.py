@@ -21,6 +21,7 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parent.parent
 OUT = ROOT / "report" / "report.html"
 BARS_OUT = ROOT / "report" / "bars.html"
+INFO_OUT = ROOT / "report" / "infographic.html"
 PNG_DIR = ROOT / "report" / "png"
 
 # PNG export geometry. PNG_W is the output image width in pixels; scale factor 1
@@ -142,6 +143,99 @@ def table(series, threads):
             f'<tbody>{body}</tbody></table>')
 
 
+# Palette slot per language (matches the chart STYLE map) so infographic bars
+# use each language's chart colour.
+SLOT = {"c": 1, "cpp": 2, "swift": 3, "rust": 8, "php": 5, "java": 6,
+        "csharp": 11, "go": 10, "javascript": 4, "typescript": 9, "python": 7,
+        "ruby": 12, "lua": 13}
+
+# Plain-language framing per workload for the infographic.
+INFO_WL = {
+    1: ("\U0001F4E5", "Insert integer rows", "rows inserted / sec"),
+    2: ("\U0001F4D6", "Read &amp; sum integer rows", "rows read / sec"),
+    3: ("\U0001F4E6", "Insert 1 MB blobs", "blobs written / sec"),
+    4: ("\U0001F4E4", "Read 1 MB blobs", "blobs read / sec"),
+}
+MEDALS = {0: "\U0001F947", 1: "\U0001F948", 2: "\U0001F949"}
+
+
+def pf(v):
+    """Compact, human number: 29.4M, 188K, 335."""
+    if v >= 1e6:
+        return f"{v/1e6:.1f}M"
+    if v >= 1e5:
+        return f"{v/1e3:.0f}K"
+    if v >= 1e3:
+        return f"{v/1e3:.1f}K"
+    return f"{v:.0f}"
+
+
+def build_infographic(workloads):
+    """A plain-language, at-a-glance visual summary: per workload a ranked bar
+    list (winner = full bar) with medals, plus headline stat callouts."""
+    # Headline callouts.
+    best = None            # (peak, lang_name, workload)
+    spreads = []           # (ratio, workload, winner, slowest)
+    for w, m in workloads.items():
+        ser = [s for s in m["series"] if s["peak"] is not None]
+        if not ser:
+            continue
+        top = max(ser, key=lambda s: s["peak"])
+        bot = min(ser, key=lambda s: s["peak"])
+        if best is None or top["peak"] > best[0]:
+            best = (top["peak"], top["name"], w)
+        if bot["peak"] > 0:
+            spreads.append((top["peak"]/bot["peak"], w, top, bot))
+    widest = max(spreads, key=lambda x: x[0]) if spreads else None
+    evenest = min(spreads, key=lambda x: x[0]) if spreads else None
+
+    def callout(big, label, sub):
+        return (f'<div class="stat"><div class="stat-big">{big}</div>'
+                f'<div class="stat-label">{label}</div>'
+                f'<div class="stat-sub">{sub}</div></div>')
+
+    cards = []
+    if best:
+        cards.append(callout(pf(best[0]), "Fastest single result",
+                             f"{best[1]} — {INFO_WL[best[2]][1]}"))
+    if widest:
+        _, w, top, bot = widest
+        cards.append(callout(f"{widest[0]:.0f}×", "Biggest spread",
+                             f"{INFO_WL[w][1]}: {top['name']} vs {bot['name']}"))
+    if evenest:
+        _, w, top, bot = evenest
+        cards.append(callout(f"{evenest[0]:.1f}×", "Closest race",
+                             f"{INFO_WL[w][1]}: top to bottom"))
+    callouts = '<div class="stats">' + "".join(cards) + "</div>"
+
+    panels = []
+    for w in (1, 2, 3, 4):
+        if w not in workloads:
+            continue
+        m = workloads[w]
+        icon, title, unit = INFO_WL[w]
+        ser = sorted((s for s in m["series"] if s["peak"] is not None),
+                     key=lambda s: -s["peak"])
+        win = ser[0]["peak"] if ser else 1
+        rows = ""
+        for i, s in enumerate(ser):
+            pct = max(2.0, s["peak"]/win*100)
+            medal = MEDALS.get(i, f'<span class="rk">{i+1}</span>')
+            rows += (
+                f'<div class="row">'
+                f'<div class="rank">{medal}</div>'
+                f'<div class="lang">{s["name"]}</div>'
+                f'<div class="track"><div class="fill" style="width:{pct:.1f}%;'
+                f'background:var(--cat-{SLOT.get(s["lang"],1)})"></div></div>'
+                f'<div class="val">{pf(s["peak"])}</div></div>')
+        panels.append(
+            f'<section class="panel"><div class="phead"><span class="icon">{icon}</span>'
+            f'<div><h2>{title}</h2><div class="unit">best per language &middot; {unit}</div></div></div>'
+            f'<div class="bars">{rows}</div></section>')
+
+    return callouts + '<div class="grid">' + "".join(panels) + "</div>"
+
+
 def main():
     latest = load_rows()
     workloads = {}
@@ -218,12 +312,25 @@ def main():
         OUT, line_sections, False,
         "MySQL client benchmark — four micro-workloads by language",
         "MySQL client benchmark — four micro-workloads by language",
+        '<a class="navlink" href="infographic.html">Summary &rarr;</a>'
         '<a class="navlink" href="bars.html">Bar charts &rarr;</a>')
     render_page(
         BARS_OUT, bar_sections, True,
         "MySQL client benchmark — bar charts by worker count",
         "MySQL client benchmark — bar charts by worker count",
         '<a class="navlink" href="report.html">&larr; Line charts &amp; tables</a>')
+
+    # Infographic summary page.
+    info_html = INFOGRAPHIC_TEMPLATE
+    for k, v in {
+        "__BODY__": build_infographic(workloads),
+        "__NLANG__": str(len(langs)),
+        "__CAT_LIGHT__": cat_css(PAL_LIGHT),
+        "__CAT_DARK__": cat_css(PAL_DARK),
+    }.items():
+        info_html = info_html.replace(k, v)
+    INFO_OUT.write_text(info_html)
+    print(f"written: {INFO_OUT}")
     print(f"workloads: {', '.join(map(str, workloads))}; {len(langs)} languages")
 
     if os.environ.get("BENCH_NO_PNG") == "1":
@@ -272,6 +379,11 @@ def main():
     # groups) so the bottom (4-worker) group is never cropped.
     for sid, n_def, n_opt, ng in png_bars:
         shoot(PNG_DIR / f"{sid}.png", f"file://{BARS_OUT}#png-{sid}", bar_px_h(n_def, ng))
+    # Infographic summary: full static page, sized to fit the 2x2 panel grid
+    # (header + stats row + two rows of panels, each with one bar per language).
+    nmax = max((len(m["series"]) for m in workloads.values()), default=13)
+    info_h = 470 + 2 * (nmax * 23 + 90)
+    shoot(PNG_DIR / "infographic.png", f"file://{INFO_OUT}", info_h)
 
 
 HTML_TEMPLATE = r"""<!DOCTYPE html>
@@ -767,6 +879,77 @@ const PAGE_BARS = __PAGE_BARS__;
   }
 })();
 </script>
+</body>
+</html>
+"""
+
+
+INFOGRAPHIC_TEMPLATE = r"""<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>MySQL client benchmark — at a glance</title>
+<style>
+  .viz-root { color-scheme: light;
+    --surface-1: #fcfcfb; --page: #f6f6f3; --text-primary: #0b0b0b;
+    --text-secondary: #52514e; --muted: #898781; --grid: #e7e6df;
+    --border: rgba(11,11,11,0.10);
+    --card-shadow: inset 0 1px 0 rgba(255,255,255,0.7), 0 1px 2px rgba(17,17,17,0.04), 0 14px 32px -12px rgba(17,17,17,0.16);
+    __CAT_LIGHT__ }
+  @media (prefers-color-scheme: dark) { .viz-root {
+    color-scheme: dark; --surface-1: #1a1a19; --page: #0d0d0d; --text-primary: #f0efec;
+    --text-secondary: #c3c2b7; --muted: #898781; --grid: #2c2c2a;
+    --border: rgba(255,255,255,0.10);
+    --card-shadow: inset 0 1px 0 rgba(255,255,255,0.06), 0 1px 2px rgba(0,0,0,0.5), 0 16px 34px -12px rgba(0,0,0,0.7);
+    __CAT_DARK__ } }
+  * { box-sizing: border-box; }
+  body.viz-root { margin: 0; background: var(--page); color: var(--text-primary);
+    font-family: system-ui, -apple-system, "Segoe UI", sans-serif; }
+  .wrap { max-width: 1180px; margin: 0 auto; padding: 30px 24px 48px; }
+  header { display: flex; justify-content: space-between; align-items: baseline; gap: 16px; flex-wrap: wrap; }
+  h1 { font-size: 25px; margin: 0; letter-spacing: -0.02em; }
+  .context { color: var(--text-secondary); margin: 7px 0 0; max-width: 70ch; }
+  .navlink { color: var(--cat-1); text-decoration: none; font-weight: 600; font-size: 14px; align-self: center; }
+  .navlink:hover { text-decoration: underline; }
+  .stats { display: grid; grid-template-columns: repeat(3, 1fr); gap: 14px; margin: 22px 0 6px; }
+  .stat { background: var(--surface-1); border: 1px solid var(--border); border-radius: 14px;
+    padding: 15px 18px; box-shadow: var(--card-shadow); }
+  .stat-big { font-size: 30px; font-weight: 750; letter-spacing: -0.02em; line-height: 1.1; }
+  .stat-label { font-size: 13px; color: var(--text-secondary); font-weight: 650; margin-top: 4px; }
+  .stat-sub { font-size: 12px; color: var(--muted); margin-top: 2px; }
+  .grid { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; margin-top: 10px; }
+  .panel { background: var(--surface-1); border: 1px solid var(--border); border-radius: 16px;
+    padding: 16px 18px 14px; box-shadow: var(--card-shadow); }
+  .phead { display: flex; align-items: center; gap: 12px; margin-bottom: 12px; }
+  .icon { font-size: 25px; line-height: 1; }
+  .panel h2 { font-size: 16.5px; margin: 0; font-weight: 650; letter-spacing: -0.01em; }
+  .unit { font-size: 12px; color: var(--muted); margin-top: 1px; }
+  .bars { display: flex; flex-direction: column; gap: 5px; }
+  .row { display: grid; grid-template-columns: 22px 74px 1fr 52px; align-items: center; gap: 9px; }
+  .rank { text-align: center; font-size: 15px; }
+  .rk { display: inline-block; width: 18px; height: 18px; line-height: 18px; border-radius: 50%;
+    background: var(--grid); color: var(--text-secondary); font-size: 11px; font-weight: 600; }
+  .lang { font-size: 13px; color: var(--text-secondary); font-weight: 600; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .track { height: 15px; background: var(--grid); border-radius: 8px; overflow: hidden; }
+  .fill { height: 100%; border-radius: 8px; min-width: 3px; }
+  .val { font-size: 13px; font-weight: 650; font-variant-numeric: tabular-nums; text-align: right; }
+  footer { color: var(--muted); font-size: 12px; margin-top: 24px; max-width: 86ch; }
+  @media (max-width: 760px) { .stats { grid-template-columns: 1fr; } .grid { grid-template-columns: 1fr; } }
+</style>
+</head>
+<body class="viz-root">
+<div class="wrap">
+  <header>
+    <div>
+      <h1>MySQL from __NLANG__ languages &mdash; at a glance</h1>
+      <p class="context">The best result each language reached for each task (3-run average). Longer, greener-ranked bar = faster. Full detail on the <a class="navlink" href="report.html">charts page</a>.</p>
+    </div>
+    <a class="navlink" href="report.html">Full charts &rarr;</a>
+  </header>
+  __BODY__
+  <footer>Per-worker workloads, barrier-timed, Percona Server 8.4.11 tuned for write throughput (no per-commit fsync), workers 4&nbsp;&rarr;&nbsp;512 on 80-core hosts. &ldquo;Best per language&rdquo; is the peak across worker counts. Bars are coloured by language (same colours as the charts).</footer>
+</div>
 </body>
 </html>
 """
