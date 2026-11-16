@@ -308,7 +308,7 @@ const PAGE_BARS = true;
     // label that had to move away from its node gets a thin leader line from
     // the node to the label. The last node keeps the end-label treatment below.
     if (cfg.nodeLabels) {
-      const GAPN = 14.5;   // vertical spacing between stacked annotations
+      const GAPN = 58;     // vertical spacing between stacked annotations
       for (let i = 0; i < N-1; i++) {
         const items = cfg.seriesDefs.filter(d => d.vals[i] != null)
           .map(d => ({ d, y0: Y(d.vals[i]), y: Y(d.vals[i]) }));
@@ -516,7 +516,7 @@ const PAGE_BARS = true;
       legendInto(`legend-w${w}-ann`, shown.map(s => ({ name: labelOf(s), key: keySVG(stOf(s), 26, 12) })));
       bigChart({
         hostId: `chart-w${w}-ann`, T: M.threads, seriesDefs: defs,
-        yMax: niceMax(peak), unit: M.unit, nodeLabels: true, height: 760,
+        yMax: niceMax(peak), unit: M.unit, nodeLabels: true, height: 840,
         ariaLabel: `${M.title}: throughput by worker count, every point labelled`,
       });
     }

@@ -434,8 +434,8 @@ def main():
     # groups) so the bottom (4-worker) group is never cropped.
     for sid, n_def, n_opt, ng in png_bars:
         shoot(PNG_DIR / f"{sid}.png", f"file://{BARS_OUT}#png-{sid}", bar_px_h(n_def, ng))
-    # Annotated line charts: taller SVG (viewBox 1120x760) so per-node labels fit.
-    ann_h = int(round(RENDER_W * 760 / 1120 + 230))
+    # Annotated line charts: taller SVG (viewBox 1120x840) so per-node labels fit.
+    ann_h = int(round(RENDER_W * 840 / 1120 + 230))
     for sid in png_ann:
         shoot(PNG_DIR / f"{sid}.png", f"file://{ANN_OUT}#png-{sid}", ann_h)
     # Infographic summary: full static page — header + stats + legend, then one
@@ -730,7 +730,7 @@ const PAGE_BARS = __PAGE_BARS__;
     // label that had to move away from its node gets a thin leader line from
     // the node to the label. The last node keeps the end-label treatment below.
     if (cfg.nodeLabels) {
-      const GAPN = 14.5;   // vertical spacing between stacked annotations
+      const GAPN = 58;     // vertical spacing between stacked annotations
       for (let i = 0; i < N-1; i++) {
         const items = cfg.seriesDefs.filter(d => d.vals[i] != null)
           .map(d => ({ d, y0: Y(d.vals[i]), y: Y(d.vals[i]) }));
@@ -938,7 +938,7 @@ const PAGE_BARS = __PAGE_BARS__;
       legendInto(`legend-w${w}-ann`, shown.map(s => ({ name: labelOf(s), key: keySVG(stOf(s), 26, 12) })));
       bigChart({
         hostId: `chart-w${w}-ann`, T: M.threads, seriesDefs: defs,
-        yMax: niceMax(peak), unit: M.unit, nodeLabels: true, height: 760,
+        yMax: niceMax(peak), unit: M.unit, nodeLabels: true, height: 840,
         ariaLabel: `${M.title}: throughput by worker count, every point labelled`,
       });
     }
