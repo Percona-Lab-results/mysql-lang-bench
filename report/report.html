@@ -62,7 +62,8 @@
   svg .barval { fill: var(--muted); font-size: 9.5px; }
   svg .barvalin { fill: #ffffff; font-size: 9.5px; font-weight: 600; }
   svg .nodelabel { font-size: 11px; font-weight: 650; }
-  svg .threadlab { font-size: 9px; font-weight: 700; paint-order: stroke; stroke: rgba(0,0,0,0.25); stroke-width: 2px; }
+  svg .coltitle { fill: var(--text-primary); font-size: 13px; font-weight: 700; }
+  svg .ranklab { font-size: 10.5px; font-weight: 650; }
   #tooltip { position: fixed; pointer-events: none; z-index: 10; display: none;
     background: var(--surface-1); border: 1px solid var(--border); border-radius: 8px;
     box-shadow: 0 4px 14px rgba(0,0,0,0.18); padding: 8px 11px; font-size: 12.5px; min-width: 150px; }
@@ -496,86 +497,66 @@ const PAGE_BARS = false;
   // best-leftmost. Within a group that ordering is crossing-free, and a down
   // connector can never cross an up connector, so no two connectors intersect.
   function rankChart(cfg) {
+    // Table of worker-count columns. In each column: a nested bar group where
+    // the bars are the LANGUAGES at that worker count (best = outer, tallest,
+    // widest; each next one narrower and centred inside), then the languages
+    // listed by rank, evenly spaced, each joined to its bar top by a thin
+    // right-angled connector. Connectors never cross (see note above). One
+    // shared y-scale per workload; columns wrap 4 per row.
     const items = cfg.items, S = items.length, T = cfg.T, NT = T.length;
-    const BW = 1400, BH = 600, BM = { l: 64, r: 236, t: 44, b: 40 };
-    const CHW = 9, chanRegion = S*CHW + 20;
-    const barsRight = BW - BM.r - chanRegion;
-    const BIW = barsRight - BM.l, BIH = BH - BM.t - BM.b;
-    const WMAX = 92, WMIN = 38, GAP = 10;           // group width by language rank
-    const INNER_MIN = 0.28;                          // innermost nested bar = 28% of group width
-    const widths = items.map((_, k) => S > 1 ? WMAX - (WMAX - WMIN) * k / (S - 1) : WMAX);
-    const total = widths.reduce((a, b) => a + b, 0) + GAP * (S - 1);
-    const sc = Math.min(1, BIW / total);
-    const Y = v => BM.t + BIH - (v / cfg.yMax) * BIH;
-    // Shade per worker count: lighter for few workers, full colour for many.
-    const alphaOf = ti => NT > 1 ? 0.28 + 0.72 * ti / (NT - 1) : 1;
+    const COLS = 4, ROWS = Math.ceil(NT / COLS);
+    const BW = 1400, ML = 58, MR = 14, CW = (BW - ML - MR) / COLS;
+    const TITLE_H = 26, PLOT_H = 400, ROW_B = 30, RH = TITLE_H + PLOT_H + ROW_B, TOP = 8;
+    const BH = TOP + ROWS * RH;
+    const GW = 84, INNER_MIN = 0.28, CHW = 5;
     const svg = el("svg", { viewBox: `0 0 ${BW} ${BH}`, role: "img", "aria-label": cfg.ariaLabel });
-    // Worker-count shade legend along the top.
-    let lgx = BM.l;
-    const lgt = el("text", { x: lgx, y: 18, class: "axisname" }); lgt.textContent = "workers:"; svg.appendChild(lgt); lgx += 56;
-    T.forEach((t, ti) => {
-      svg.appendChild(el("rect", { x: lgx, y: 9, width: 16, height: 12, rx: 2, fill: "var(--surface-1)" }));
-      svg.appendChild(el("rect", { x: lgx, y: 9, width: 16, height: 12, rx: 2, fill: "var(--cat-1)", "fill-opacity": alphaOf(ti).toFixed(2) }));
-      const tt = el("text", { x: lgx + 20, y: 19 }); tt.textContent = t; svg.appendChild(tt); lgx += 20 + 10 + 8 * String(t).length;
-    });
-    // Horizontal gridlines + y tick labels.
     const step = cfg.yMax / 5;
-    for (let k = 0; k <= 5; k++) { const tv = step * k;
-      svg.appendChild(el("line", { x1: BM.l, x2: barsRight, y1: Y(tv), y2: Y(tv), stroke: "var(--grid)", "stroke-width": 1 }));
-      const t = el("text", { x: BM.l - 6, y: Y(tv) + 3.5, "text-anchor": "end" }); t.textContent = tv === 0 ? "0" : fmt(tv); svg.appendChild(t); }
-    svg.appendChild(el("line", { x1: BM.l, x2: barsRight, y1: BM.t + BIH, y2: BM.t + BIH, stroke: "var(--baseline)", "stroke-width": 1 }));
-    // Groups: one per language; inside, one nested bar per worker count, the
-    // highest-throughput worker count outermost (widest + tallest), each next
-    // one narrower and centred inside it, drawn outer-first so inner bars sit
-    // on top. Bars are solid (surface underlay + tinted overlay) so lighter
-    // shades stay light even inside a dark outer bar.
-    let x = BM.l + (BIW - total * sc) / 2;
-    const tops = [];
-    items.forEach((it, k) => {
-      const gw = widths[k] * sc, cx = x + gw / 2;
-      const order = T.map((_, ti) => ti).filter(ti => it.vals[ti] != null).sort((a, b) => it.vals[b] - it.vals[a]);
-      let lastLab = -Infinity;
-      order.forEach((ti, j) => {
-        const v = it.vals[ti], yt = Y(v), h = Math.max(1, BM.t + BIH - yt);
-        const w = gw * (order.length > 1 ? 1 - (1 - INNER_MIN) * j / (order.length - 1) : 1);
+    T.forEach((t, ti) => {
+      const c = ti % COLS, r = Math.floor(ti / COLS);
+      const x0 = ML + c * CW, y0 = TOP + r * RH;
+      const pt = y0 + TITLE_H, pb = pt + PLOT_H;              // plot top / bottom (baseline)
+      const Y = v => pb - (v / cfg.yMax) * PLOT_H;
+      const bx0 = x0 + 10;                                     // bar group left
+      // Column title.
+      const tt = el("text", { x: bx0, y: y0 + 17, class: "coltitle" }); tt.textContent = `${t} workers`; svg.appendChild(tt);
+      // Gridlines behind the bar group; y tick labels once per row (first column).
+      for (let k = 0; k <= 5; k++) { const tv = step * k;
+        svg.appendChild(el("line", { x1: bx0 - 6, x2: bx0 + GW + 6, y1: Y(tv), y2: Y(tv), stroke: "var(--grid)", "stroke-width": 1 }));
+        if (c === 0) { const yl = el("text", { x: ML - 6, y: Y(tv) + 3.5, "text-anchor": "end" }); yl.textContent = tv === 0 ? "0" : fmt(tv); svg.appendChild(yl); } }
+      svg.appendChild(el("line", { x1: bx0 - 6, x2: bx0 + GW + 6, y1: pb, y2: pb, stroke: "var(--baseline)", "stroke-width": 1 }));
+      // Languages at this worker count, best first.
+      const ranked = items.filter(it => it.vals[ti] != null).map(it => ({ it, v: it.vals[ti] })).sort((a, b) => b.v - a.v);
+      const n = ranked.length, cx = bx0 + GW / 2;
+      const tops = [];
+      ranked.forEach((e, j) => {
+        const yt = Y(e.v), h = Math.max(1, pb - yt);
+        const w = GW * (n > 1 ? 1 - (1 - INNER_MIN) * j / (n - 1) : 1);
         const bx = cx - w / 2, rr = Math.min(3, w / 2);
-        svg.appendChild(el("rect", { x: bx, y: yt, width: w, height: h, rx: rr, ry: rr, fill: "var(--surface-1)" }));
-        const r = el("rect", { x: bx, y: yt, width: w, height: h, rx: rr, ry: rr, fill: it.st.color, "fill-opacity": alphaOf(ti).toFixed(2),
-                               stroke: "var(--surface-1)", "stroke-width": 0.8 });
-        r.style.cursor = "crosshair";
-        r.addEventListener("pointerenter", ev => showBar(ev, T[ti], it, v, cfg.unit));
-        r.addEventListener("pointermove", moveTip);
-        r.addEventListener("pointerleave", hideTip);
-        svg.appendChild(r);
-        // Thread-count label just inside the bar top, when it will not collide
-        // with the enclosing bar's label.
-        if (h >= 14 && yt - lastLab >= 11) {
-          const tl = el("text", { x: cx, y: yt + 10, "text-anchor": "middle", class: "threadlab" });
-          tl.style.fill = alphaOf(ti) >= 0.62 ? "#ffffff" : "var(--text-primary)";
-          tl.textContent = T[ti]; svg.appendChild(tl); lastLab = yt;
-        }
+        const bar = el("rect", { x: bx, y: yt, width: w, height: h, rx: rr, ry: rr, fill: e.it.st.color, "fill-opacity": "0.92",
+                                 stroke: "var(--surface-1)", "stroke-width": 0.8 });
+        bar.style.cursor = "crosshair";
+        bar.addEventListener("pointerenter", ev => showBar(ev, t, e.it, e.v, cfg.unit));
+        bar.addEventListener("pointermove", moveTip);
+        bar.addEventListener("pointerleave", hideTip);
+        svg.appendChild(bar);
+        tops.push({ x: bx + w, y: yt });
       });
-      const rk = el("text", { x: cx, y: BM.t + BIH + 14, "text-anchor": "middle" }); rk.textContent = k + 1; svg.appendChild(rk);
-      tops.push({ x: x + gw, y: Y(it.value) });
-      x += gw + GAP * sc;
-    });
-    // Evenly spaced language labels on the right; connectors from the outer
-    // (peak) bar top. Routing note: see the comment above rankChart.
-    const labelX = BW - BM.r + 26;
-    const ly = k => S > 1 ? BM.t + 8 + k * (BIH - 16) / (S - 1) : BM.t + BIH / 2;
-    const down = [], up = [];
-    items.forEach((_, k) => (tops[k].y <= ly(k) ? down : up).push(k));
-    const chanX = {};
-    let slot = 0;
-    for (const k of up) chanX[k] = barsRight + 12 + (slot++) * CHW;
-    for (const k of down.slice().reverse()) chanX[k] = barsRight + 12 + (slot++) * CHW;
-    items.forEach((it, k) => {
-      const t = tops[k], cxn = chanX[k], y2 = ly(k);
-      const p = el("path", { d: `M ${t.x.toFixed(1)} ${t.y.toFixed(1)} H ${cxn.toFixed(1)} V ${y2.toFixed(1)} H ${(labelX - 7).toFixed(1)}`,
-                              fill: "none", "stroke-width": 1, "stroke-linejoin": "miter", "stroke-opacity": "0.85" });
-      p.style.stroke = it.st.color; svg.appendChild(p);
-      const lab = el("text", { x: labelX, y: y2 + 3.8, class: "seriesname" });
-      lab.style.fill = it.st.color; lab.textContent = `${k + 1}. ${it.name}  ${fmt(it.value)}`; svg.appendChild(lab);
+      // Ranked label list, evenly spaced over the plot height.
+      const chan0 = bx0 + GW + 10, labelX = chan0 + n * CHW + 12;
+      const ly = j => n > 1 ? pt + 6 + j * (PLOT_H - 12) / (n - 1) : pt + PLOT_H / 2;
+      const down = [], up = [];
+      ranked.forEach((_, j) => (tops[j].y <= ly(j) ? down : up).push(j));
+      const chanX = {}; let slot = 0;
+      for (const j of up) chanX[j] = chan0 + (slot++) * CHW;
+      for (const j of down.slice().reverse()) chanX[j] = chan0 + (slot++) * CHW;
+      ranked.forEach((e, j) => {
+        const tp = tops[j], cxn = chanX[j], y2 = ly(j);
+        const p = el("path", { d: `M ${tp.x.toFixed(1)} ${tp.y.toFixed(1)} H ${cxn.toFixed(1)} V ${y2.toFixed(1)} H ${(labelX - 5).toFixed(1)}`,
+                                fill: "none", "stroke-width": 0.9, "stroke-linejoin": "miter", "stroke-opacity": "0.85" });
+        p.style.stroke = e.it.st.color; svg.appendChild(p);
+        const lab = el("text", { x: labelX, y: y2 + 3.5, class: "ranklab" });
+        lab.style.fill = e.it.st.color; lab.textContent = `${j + 1}. ${e.it.name}  ${fmt(e.v)}`; svg.appendChild(lab);
+      });
     });
     const host = document.getElementById(cfg.hostId); if (host) host.appendChild(svg);
   }
