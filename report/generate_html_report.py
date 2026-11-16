@@ -534,9 +534,14 @@ const PAGE_BARS = __PAGE_BARS__;
     if (over > 0) for (const L of labels) L.y -= over*(L.y-BM.t)/BIH;
     for (const L of labels) {
       const ax = X(L.li);
-      if (Math.abs(L.y-L.endY) > 3 || ax < X(N-1)-1)
-        svg.appendChild(el("line", { x1: ax+7, y1: L.endY, x2: X(N-1)+22, y2: L.y, stroke: "var(--baseline)", "stroke-width": 1 }));
+      if (Math.abs(L.y-L.endY) > 3 || ax < X(N-1)-1) {
+        const ldr = el("line", { x1: ax+7, y1: L.endY, x2: X(N-1)+22, y2: L.y, "stroke-width": 1 });
+        ldr.style.stroke = L.d.st.color; ldr.setAttribute("stroke-opacity", "0.6");
+        svg.appendChild(ldr);
+      }
+      // End-of-line reference label (language + score) in the series' own colour.
       const t = el("text", { x: X(N-1)+26, y: L.y+3.5, class: "seriesname" });
+      t.style.fill = L.d.st.color;
       t.textContent = L.d.name + "  " + fmt(L.d.vals[L.li]); svg.appendChild(t);
     }
     const cross = el("line", { y1: BM.t, y2: BM.t+BIH, stroke: "var(--baseline)", "stroke-width": 1, visibility: "hidden" });
