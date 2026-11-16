@@ -213,10 +213,13 @@ def build_infographic(workloads):
     # by its share of the best result at that worker count (darker = closer to
     # the column's winner, which is outlined). Keeps the full thread-count
     # detail while still reading at a glance.
-    legend = ('<div class="hm-legend"><span>Cell shade = share of the best result '
-              'at that worker count</span><span class="ramp"></span>'
-              '<span class="ramp-lab">slower&nbsp;&rarr;&nbsp;fastest</span>'
-              '<span class="winlab"><span class="winbox"></span>column winner</span></div>')
+    CLOSE = 0.97   # "close leader" = within 3% of the column's fastest result
+    legend = ('<div class="hm-legend">'
+              '<span class="lg lg-win">&#9733; 27.3M</span><span>fastest in column</span>'
+              '<span class="lg lg-close">26.8M</span><span>within 3% of fastest</span>'
+              '<span class="lg lg-low">&#9660; 158K</span><span>slowest in column</span>'
+              '<span class="ramp"></span><span class="ramp-lab">shade = share of fastest</span>'
+              '</div>')
     panels = []
     for w in (1, 2, 3, 4):
         if w not in workloads:
@@ -226,11 +229,12 @@ def build_infographic(workloads):
         threads = m["threads"]
         ser = sorted((s for s in m["series"] if s["peak"] is not None),
                      key=lambda s: -s["peak"])
-        # Best value at each worker count (column).
-        col_best = []
+        # Best and worst value at each worker count (column).
+        col_best, col_low = [], []
         for i in range(len(threads)):
             vals = [s["thr"][i] for s in ser if s["thr"][i] is not None]
             col_best.append(max(vals) if vals else None)
+            col_low.append(min(vals) if vals else None)
         head = "".join(f'<th class="num">{t}</th>' for t in threads)
         body = ""
         for rank, s in enumerate(ser):
@@ -243,9 +247,18 @@ def build_infographic(workloads):
                 frac = v / col_best[i]
                 alpha = 0.06 + 0.86 * frac ** 1.6   # perceptual-ish ramp
                 ink = "#ffffff" if alpha > 0.52 else "var(--text-primary)"
-                win = ' win' if frac >= 0.999 else ''
-                cells += (f'<td class="cell{win}" style="background:rgba(42,120,214,{alpha:.2f});'
-                          f'color:{ink}">{pf(v)}</td>')
+                # Per-column call-outs: the leader (star + gold ring), close
+                # leaders (thin gold ring), and the lowest score (red, marker).
+                cls, txt = "", pf(v)
+                if frac >= 0.999:
+                    cls, txt = " win", "&#9733; " + txt
+                elif frac >= CLOSE:
+                    cls = " close"
+                if v <= col_low[i] and len(ser) > 1 and frac < 0.999:
+                    cls, txt = " low", "&#9660; " + txt
+                    ink = "var(--low-ink)"
+                cells += (f'<td class="cell{cls}" style="background:rgba(42,120,214,{alpha:.2f});'
+                          f'color:{ink}">{txt}</td>')
             body += (f'<tr><td class="rank">{medal}</td>'
                      f'<td class="lang"><span class="dot" style="background:var(--cat-{SLOT.get(s["lang"],1)})"></span>{s["name"]}</td>'
                      f'{cells}<td class="peak">{pf(s["peak"])}</td></tr>')
@@ -405,7 +418,7 @@ def main():
         shoot(PNG_DIR / f"{sid}.png", f"file://{BARS_OUT}#png-{sid}", bar_px_h(n_def, ng))
     # Infographic summary: full static page — header + stats + legend, then one
     # stacked heatmap panel per workload (a 27px row per language + chrome).
-    info_h = 330 + sum(len(m["series"]) * 27 + 118 for m in workloads.values())
+    info_h = 420 + sum(len(m["series"]) * 27 + 118 for m in workloads.values())
     shoot(PNG_DIR / "infographic.png", f"file://{INFO_OUT}", info_h)
 
 
@@ -919,12 +932,16 @@ INFOGRAPHIC_TEMPLATE = r"""<!DOCTYPE html>
     --text-secondary: #52514e; --muted: #898781; --grid: #e7e6df;
     --border: rgba(11,11,11,0.10);
     --card-shadow: inset 0 1px 0 rgba(255,255,255,0.7), 0 1px 2px rgba(17,17,17,0.04), 0 14px 32px -12px rgba(17,17,17,0.16);
+    --gold: #e8a800; --gold-soft: rgba(232,168,0,0.55);
+    --low-ink: #c0262b; --low-ring: rgba(192,38,43,0.45);
     __CAT_LIGHT__ }
   @media (prefers-color-scheme: dark) { .viz-root {
     color-scheme: dark; --surface-1: #1a1a19; --page: #0d0d0d; --text-primary: #f0efec;
     --text-secondary: #c3c2b7; --muted: #898781; --grid: #2c2c2a;
     --border: rgba(255,255,255,0.10);
     --card-shadow: inset 0 1px 0 rgba(255,255,255,0.06), 0 1px 2px rgba(0,0,0,0.5), 0 16px 34px -12px rgba(0,0,0,0.7);
+    --gold: #f2c23a; --gold-soft: rgba(242,194,58,0.6);
+    --low-ink: #ff7a7a; --low-ring: rgba(255,122,122,0.5);
     __CAT_DARK__ } }
   * { box-sizing: border-box; }
   body.viz-root { margin: 0; background: var(--page); color: var(--text-primary);
@@ -941,14 +958,17 @@ INFOGRAPHIC_TEMPLATE = r"""<!DOCTYPE html>
   .stat-big { font-size: 30px; font-weight: 750; letter-spacing: -0.02em; line-height: 1.1; }
   .stat-label { font-size: 13px; color: var(--text-secondary); font-weight: 650; margin-top: 4px; }
   .stat-sub { font-size: 12px; color: var(--muted); margin-top: 2px; }
-  .hm-legend { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; color: var(--text-secondary);
+  .hm-legend { display: flex; align-items: center; gap: 8px 10px; flex-wrap: wrap; color: var(--text-secondary);
     font-size: 12.5px; margin: 14px 0 4px; }
-  .ramp { width: 120px; height: 10px; border-radius: 5px;
+  .hm-legend > span:nth-child(even) { margin-right: 10px; }
+  .lg { display: inline-block; padding: 2px 8px; border-radius: 5px; font-size: 12px; font-weight: 650;
+    font-variant-numeric: tabular-nums; }
+  .lg-win { background: rgba(42,120,214,0.92); color: #fff; box-shadow: inset 0 0 0 2.5px var(--gold); }
+  .lg-close { background: rgba(42,120,214,0.72); color: #fff; box-shadow: inset 0 0 0 2px var(--gold-soft); }
+  .lg-low { background: rgba(42,120,214,0.06); color: var(--low-ink); box-shadow: inset 0 0 0 1.5px var(--low-ring); }
+  .ramp { width: 110px; height: 10px; border-radius: 5px; margin-left: 6px;
     background: linear-gradient(90deg, rgba(42,120,214,0.06), rgba(42,120,214,0.92)); }
   .ramp-lab { color: var(--muted); }
-  .winlab { display: inline-flex; align-items: center; gap: 6px; margin-left: 8px; }
-  .winbox { width: 14px; height: 12px; border-radius: 3px; background: rgba(42,120,214,0.92);
-    box-shadow: 0 0 0 2px var(--surface-1), 0 0 0 3.5px var(--text-primary); }
   .stack { display: flex; flex-direction: column; gap: 16px; margin-top: 12px; }
   .panel { background: var(--surface-1); border: 1px solid var(--border); border-radius: 16px;
     padding: 16px 18px 14px; box-shadow: var(--card-shadow); }
@@ -969,7 +989,9 @@ INFOGRAPHIC_TEMPLATE = r"""<!DOCTYPE html>
   .dot { display: inline-block; width: 9px; height: 9px; border-radius: 50%; margin-right: 6px; vertical-align: -1px; }
   td.cell { text-align: center; border-radius: 5px; font-variant-numeric: tabular-nums; font-weight: 550; }
   td.cell.none { color: var(--muted); }
-  td.cell.win { font-weight: 750; box-shadow: inset 0 0 0 2px var(--text-primary); }
+  td.cell.win { font-weight: 750; box-shadow: inset 0 0 0 2.5px var(--gold); }
+  td.cell.close { font-weight: 650; box-shadow: inset 0 0 0 2px var(--gold-soft); }
+  td.cell.low { font-weight: 700; box-shadow: inset 0 0 0 1.5px var(--low-ring); }
   td.peak { width: 56px; text-align: right; padding-right: 4px; font-weight: 700; font-variant-numeric: tabular-nums; }
   footer { color: var(--muted); font-size: 12px; margin-top: 24px; max-width: 86ch; }
   @media (max-width: 760px) { .stats { grid-template-columns: 1fr; } table.hm { font-size: 11px; } }
