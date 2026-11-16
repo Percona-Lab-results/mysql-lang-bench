@@ -250,7 +250,6 @@ const PAGE_BARS = false;
   function bigChart(cfg) {
     const T = cfg.T, N = T.length;
     const FY = cfg.fmtY || fmt;   // y-axis + end-label number format
-    const nodeLabelEls = [];      // per-node annotation texts (get backing plates after mount)
     const BW = 1120, BH = cfg.height || 540, BM = { l: 64, r: 184, t: 14, b: 32 };
     const BIW = BW-BM.l-BM.r, BIH = BH-BM.t-BM.b;
     const X = i => BM.l + i*BIW/(N-1);
@@ -281,16 +280,28 @@ const PAGE_BARS = false;
       for (let i=0;i<N;i++){ if (vals[i]==null){pen=false;continue;}
         d += (pen?"L":"M")+X(i).toFixed(1)+" "+Y(vals[i]).toFixed(1)+" "; pen=true; } return d.trim(); };
     const lastIdxOf = vals => { for (let i=N-1;i>=0;i--) if (vals[i]!=null) return i; return N-1; };
-    // Series (lines + markers) share a soft drop shadow so they lift off the grid.
-    const slayer = el("g", { filter: "url(#chart-shadow)" });
+    // Series lines and markers are separate layers (both with a soft drop shadow
+    // so they lift off the grid). On annotated charts, full-height translucent
+    // panels go BETWEEN them: they dim the lines in every gap between worker
+    // counts while the markers (nodes) and labels stay crisp on top.
+    const lines = el("g", { filter: "url(#chart-shadow)" });
+    const marks = el("g", { filter: "url(#chart-shadow)" });
     for (let si=cfg.seriesDefs.length-1; si>=0; si--) {
       const d = cfg.seriesDefs[si];
       const lp = el("path", { d: path(d.vals), fill: "none", stroke: d.st.color, "stroke-width": 2.4, "stroke-linejoin": "round", "stroke-linecap": "round" });
       if (d.st.dash) lp.setAttribute("stroke-dasharray", "7 5");
-      slayer.appendChild(lp);
-      for (let i=0;i<N;i++){ if (d.vals[i]==null) continue; slayer.appendChild(shapeNode(d.st.shape, X(i), Y(d.vals[i]), d.st.color, "var(--surface-1)")); }
+      lines.appendChild(lp);
+      for (let i=0;i<N;i++){ if (d.vals[i]==null) continue; marks.appendChild(shapeNode(d.st.shape, X(i), Y(d.vals[i]), d.st.color, "var(--surface-1)")); }
     }
-    svg.appendChild(slayer);
+    svg.appendChild(lines);
+    if (cfg.nodeLabels) {
+      const PAD = 9;   // leave a clear window around each node column
+      for (let i = 0; i < N-1; i++) {
+        svg.appendChild(el("rect", { x: X(i)+PAD, y: BM.t, width: X(i+1)-X(i)-2*PAD, height: BIH, rx: 4, ry: 4,
+                                     fill: "var(--surface-1)", "fill-opacity": "0.74" }));
+      }
+    }
+    svg.appendChild(marks);
     // Per-node annotations: in the horizontal gap to the right of each worker
     // count, write "<language> <score>" level with that node's Y. Labels that
     // would overlap are pushed apart (min GAPN px) and kept inside the plot; a
@@ -319,7 +330,6 @@ const PAGE_BARS = false;
           t.style.fill = L.d.st.color;
           t.textContent = L.d.name + " " + FY(L.d.vals[i]);
           svg.appendChild(t);
-          nodeLabelEls.push(t);
         }
       }
     }
@@ -371,14 +381,6 @@ const PAGE_BARS = false;
         const i = Math.min(N-1, Math.max(0, idx + (ev.key==="ArrowRight"?1:-1))); const r = svg.getBoundingClientRect();
         show(i, r.left+(X(i)*r.width/BW), r.top+r.height/3); } else if (ev.key==="Escape") hide(); });
     const host = document.getElementById(cfg.hostId); if (host) host.appendChild(svg);
-    // Semi-transparent backing plate behind each node label, sized from the
-    // rendered text (getBBox needs the SVG in the document, hence after append).
-    for (const t of nodeLabelEls) {
-      const b = t.getBBox();
-      const bg = el("rect", { x: b.x-3, y: b.y-1.5, width: b.width+6, height: b.height+3, rx: 3, ry: 3,
-                              fill: "var(--surface-1)", "fill-opacity": "0.72" });
-      svg.insertBefore(bg, t);
-    }
   }
 
   // --- Shared tooltip helpers for the per-mark bar hover layer. ---
