@@ -208,32 +208,56 @@ def build_infographic(workloads):
                              f"{INFO_WL[w][1]}: top to bottom"))
     callouts = '<div class="stats">' + "".join(cards) + "</div>"
 
+    # One heatmap matrix per workload: a row per language (ranked by peak), a
+    # column per worker count, the throughput in every cell, and the cell shaded
+    # by its share of the best result at that worker count (darker = closer to
+    # the column's winner, which is outlined). Keeps the full thread-count
+    # detail while still reading at a glance.
+    legend = ('<div class="hm-legend"><span>Cell shade = share of the best result '
+              'at that worker count</span><span class="ramp"></span>'
+              '<span class="ramp-lab">slower&nbsp;&rarr;&nbsp;fastest</span>'
+              '<span class="winlab"><span class="winbox"></span>column winner</span></div>')
     panels = []
     for w in (1, 2, 3, 4):
         if w not in workloads:
             continue
         m = workloads[w]
         icon, title, unit = INFO_WL[w]
+        threads = m["threads"]
         ser = sorted((s for s in m["series"] if s["peak"] is not None),
                      key=lambda s: -s["peak"])
-        win = ser[0]["peak"] if ser else 1
-        rows = ""
-        for i, s in enumerate(ser):
-            pct = max(2.0, s["peak"]/win*100)
-            medal = MEDALS.get(i, f'<span class="rk">{i+1}</span>')
-            rows += (
-                f'<div class="row">'
-                f'<div class="rank">{medal}</div>'
-                f'<div class="lang">{s["name"]}</div>'
-                f'<div class="track"><div class="fill" style="width:{pct:.1f}%;'
-                f'background:var(--cat-{SLOT.get(s["lang"],1)})"></div></div>'
-                f'<div class="val">{pf(s["peak"])}</div></div>')
+        # Best value at each worker count (column).
+        col_best = []
+        for i in range(len(threads)):
+            vals = [s["thr"][i] for s in ser if s["thr"][i] is not None]
+            col_best.append(max(vals) if vals else None)
+        head = "".join(f'<th class="num">{t}</th>' for t in threads)
+        body = ""
+        for rank, s in enumerate(ser):
+            medal = MEDALS.get(rank, f'<span class="rk">{rank+1}</span>')
+            cells = ""
+            for i, v in enumerate(s["thr"]):
+                if v is None or not col_best[i]:
+                    cells += '<td class="cell none">–</td>'
+                    continue
+                frac = v / col_best[i]
+                alpha = 0.06 + 0.86 * frac ** 1.6   # perceptual-ish ramp
+                ink = "#ffffff" if alpha > 0.52 else "var(--text-primary)"
+                win = ' win' if frac >= 0.999 else ''
+                cells += (f'<td class="cell{win}" style="background:rgba(42,120,214,{alpha:.2f});'
+                          f'color:{ink}">{pf(v)}</td>')
+            body += (f'<tr><td class="rank">{medal}</td>'
+                     f'<td class="lang"><span class="dot" style="background:var(--cat-{SLOT.get(s["lang"],1)})"></span>{s["name"]}</td>'
+                     f'{cells}<td class="peak">{pf(s["peak"])}</td></tr>')
         panels.append(
             f'<section class="panel"><div class="phead"><span class="icon">{icon}</span>'
-            f'<div><h2>{title}</h2><div class="unit">best per language &middot; {unit}</div></div></div>'
-            f'<div class="bars">{rows}</div></section>')
+            f'<div><h2>{title}</h2><div class="unit">{unit} &middot; rows ranked by best result</div></div></div>'
+            f'<table class="hm"><thead><tr><th></th><th class="langh">Language</th>'
+            f'<th class="grp" colspan="{len(threads)}">concurrent workers</th><th class="peakh">best</th></tr>'
+            f'<tr><th></th><th></th>{head}<th></th></tr></thead>'
+            f'<tbody>{body}</tbody></table></section>')
 
-    return callouts + '<div class="grid">' + "".join(panels) + "</div>"
+    return callouts + legend + '<div class="stack">' + "".join(panels) + "</div>"
 
 
 def main():
@@ -379,10 +403,9 @@ def main():
     # groups) so the bottom (4-worker) group is never cropped.
     for sid, n_def, n_opt, ng in png_bars:
         shoot(PNG_DIR / f"{sid}.png", f"file://{BARS_OUT}#png-{sid}", bar_px_h(n_def, ng))
-    # Infographic summary: full static page, sized to fit the 2x2 panel grid
-    # (header + stats row + two rows of panels, each with one bar per language).
-    nmax = max((len(m["series"]) for m in workloads.values()), default=13)
-    info_h = 470 + 2 * (nmax * 23 + 90)
+    # Infographic summary: full static page — header + stats + legend, then one
+    # stacked heatmap panel per workload (a 27px row per language + chrome).
+    info_h = 330 + sum(len(m["series"]) * 27 + 118 for m in workloads.values())
     shoot(PNG_DIR / "infographic.png", f"file://{INFO_OUT}", info_h)
 
 
@@ -918,24 +941,38 @@ INFOGRAPHIC_TEMPLATE = r"""<!DOCTYPE html>
   .stat-big { font-size: 30px; font-weight: 750; letter-spacing: -0.02em; line-height: 1.1; }
   .stat-label { font-size: 13px; color: var(--text-secondary); font-weight: 650; margin-top: 4px; }
   .stat-sub { font-size: 12px; color: var(--muted); margin-top: 2px; }
-  .grid { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; margin-top: 10px; }
+  .hm-legend { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; color: var(--text-secondary);
+    font-size: 12.5px; margin: 14px 0 4px; }
+  .ramp { width: 120px; height: 10px; border-radius: 5px;
+    background: linear-gradient(90deg, rgba(42,120,214,0.06), rgba(42,120,214,0.92)); }
+  .ramp-lab { color: var(--muted); }
+  .winlab { display: inline-flex; align-items: center; gap: 6px; margin-left: 8px; }
+  .winbox { width: 14px; height: 12px; border-radius: 3px; background: rgba(42,120,214,0.92);
+    box-shadow: 0 0 0 2px var(--surface-1), 0 0 0 3.5px var(--text-primary); }
+  .stack { display: flex; flex-direction: column; gap: 16px; margin-top: 12px; }
   .panel { background: var(--surface-1); border: 1px solid var(--border); border-radius: 16px;
     padding: 16px 18px 14px; box-shadow: var(--card-shadow); }
-  .phead { display: flex; align-items: center; gap: 12px; margin-bottom: 12px; }
+  .phead { display: flex; align-items: center; gap: 12px; margin-bottom: 10px; }
   .icon { font-size: 25px; line-height: 1; }
   .panel h2 { font-size: 16.5px; margin: 0; font-weight: 650; letter-spacing: -0.01em; }
   .unit { font-size: 12px; color: var(--muted); margin-top: 1px; }
-  .bars { display: flex; flex-direction: column; gap: 5px; }
-  .row { display: grid; grid-template-columns: 22px 74px 1fr 52px; align-items: center; gap: 9px; }
-  .rank { text-align: center; font-size: 15px; }
+  table.hm { width: 100%; border-collapse: separate; border-spacing: 3px 3px; font-size: 12.5px; }
+  table.hm th { font-weight: 600; color: var(--muted); font-size: 11.5px; padding: 0 2px 2px; text-align: center; }
+  table.hm th.langh { text-align: left; padding-left: 4px; }
+  table.hm th.grp { color: var(--text-secondary); letter-spacing: 0.02em; text-transform: uppercase; font-size: 10.5px; }
+  table.hm th.peakh { color: var(--text-secondary); }
+  table.hm td { padding: 0; height: 24px; }
+  td.rank { width: 24px; text-align: center; font-size: 14px; }
   .rk { display: inline-block; width: 18px; height: 18px; line-height: 18px; border-radius: 50%;
     background: var(--grid); color: var(--text-secondary); font-size: 11px; font-weight: 600; }
-  .lang { font-size: 13px; color: var(--text-secondary); font-weight: 600; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-  .track { height: 15px; background: var(--grid); border-radius: 8px; overflow: hidden; }
-  .fill { height: 100%; border-radius: 8px; min-width: 3px; }
-  .val { font-size: 13px; font-weight: 650; font-variant-numeric: tabular-nums; text-align: right; }
+  td.lang { width: 104px; color: var(--text-secondary); font-weight: 600; white-space: nowrap; padding-left: 4px; }
+  .dot { display: inline-block; width: 9px; height: 9px; border-radius: 50%; margin-right: 6px; vertical-align: -1px; }
+  td.cell { text-align: center; border-radius: 5px; font-variant-numeric: tabular-nums; font-weight: 550; }
+  td.cell.none { color: var(--muted); }
+  td.cell.win { font-weight: 750; box-shadow: inset 0 0 0 2px var(--text-primary); }
+  td.peak { width: 56px; text-align: right; padding-right: 4px; font-weight: 700; font-variant-numeric: tabular-nums; }
   footer { color: var(--muted); font-size: 12px; margin-top: 24px; max-width: 86ch; }
-  @media (max-width: 760px) { .stats { grid-template-columns: 1fr; } .grid { grid-template-columns: 1fr; } }
+  @media (max-width: 760px) { .stats { grid-template-columns: 1fr; } table.hm { font-size: 11px; } }
 </style>
 </head>
 <body class="viz-root">
@@ -943,7 +980,7 @@ INFOGRAPHIC_TEMPLATE = r"""<!DOCTYPE html>
   <header>
     <div>
       <h1>MySQL from __NLANG__ languages &mdash; at a glance</h1>
-      <p class="context">The best result each language reached for each task (3-run average). Longer, greener-ranked bar = faster. Full detail on the <a class="navlink" href="report.html">charts page</a>.</p>
+      <p class="context">Every language&rsquo;s throughput for every task at every worker count (3-run average). Each row is a language, each column a concurrency level; darker cells are closer to the fastest result in that column. Full charts on the <a class="navlink" href="report.html">charts page</a>.</p>
     </div>
     <a class="navlink" href="report.html">Full charts &rarr;</a>
   </header>
