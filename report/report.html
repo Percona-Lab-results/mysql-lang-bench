@@ -525,17 +525,9 @@ const PAGE_BARS = false;
     const LTYPE = { c: "native", cpp: "native", rust: "native", go: "native", swift: "native",
                     java: "managed", csharp: "managed",
                     python: "interp", php: "interp", ruby: "interp", lua: "interp", javascript: "interp", typescript: "interp" };
-    // Type hues (matching palette slots 1-3). Within a column the shade is graded
-    // by rank: the best performer is more saturated and slightly darker, the
-    // slowest is washed out and lighter.
-    const THUE = { native: 212, managed: 17, interp: 158 };
-    const shade = (type, t) => {   // t = 0 (best) .. 1 (worst)
-      const s = 88 - 50 * t, l = 38 + 26 * t;
-      return `hsl(${THUE[type]}, ${s.toFixed(0)}%, ${l.toFixed(0)}%)`;
-    };
-    const TCOL = { native: shade("native", 0.15), managed: shade("managed", 0.15), interp: shade("interp", 0.15) };
+    const TCOL = { native: "var(--cat-1)", managed: "var(--cat-2)", interp: "var(--cat-3)" };
     const TNAME = { native: "native (C, C++, Rust, Go, Swift)", managed: "managed VM (Java, C#)", interp: "interpreted / scripting (Python, PHP, Ruby, Lua, JS, TS)" };
-    const typeCol = (it, t) => shade(LTYPE[it.lang] || "interp", t);
+    const typeCol = it => TCOL[LTYPE[it.lang] || "interp"];
     // Legend along the top.
     { let lx = ML; for (const k of ["native", "managed", "interp"]) {
         svg.appendChild(el("rect", { x: lx, y: 0, width: 14, height: 11, fill: TCOL[k] }));
@@ -560,7 +552,7 @@ const PAGE_BARS = false;
       svg.appendChild(el("line", { x1: bx0 - 6, x2: bx0 + GW + 6, y1: pb, y2: pb, stroke: "var(--baseline)", "stroke-width": 1 }));
       // Flat equal-width bars, tallest first; each shorter one drawn on top,
       // shifted OFF px right, so the height differences read as a staircase.
-      ranked.forEach((e, j) => { e.col = typeCol(e.it, n > 1 ? j / (n - 1) : 0); });
+      ranked.forEach(e => { e.col = typeCol(e.it); });
       // Visual nudge: neighbouring bars whose tops would be closer than MINGAP
       // px are pushed apart (shorter one down, cascading) so every step stays
       // visible; if the cascade would run past the baseline the whole stack is
