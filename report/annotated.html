@@ -171,6 +171,9 @@ const PAGE_BARS = false;
   const fmt = v => v >= 1e6 ? (v / 1e6).toFixed(1) + "M"
     : v >= 10000 ? Math.round(v / 1000) + "K" : Math.round(v).toLocaleString("en-US");
   const fmtFull = v => Math.round(v).toLocaleString("en-US");
+  // Two-decimal compact form (27.23M / 87.42K / 339.70) so near-ties stay ordered.
+  const fmt2 = v => v >= 1e6 ? (v / 1e6).toFixed(2) + "M"
+    : v >= 1e3 ? (v / 1e3).toFixed(2) + "K" : v.toFixed(2);
   // CPU cost (us/op) spans ~0.1 to ~1e5; keep a couple of significant digits.
   const fmtCpu = v => v >= 10000 ? Math.round(v/1000) + "k"
     : v >= 100 ? Math.round(v).toLocaleString("en-US")
@@ -508,7 +511,7 @@ const PAGE_BARS = false;
                                 fill: "none", "stroke-width": 0.9, "stroke-linejoin": "miter", "stroke-opacity": "0.85" });
         p.style.stroke = e.col; svg.appendChild(p);
         const lab = el("text", { x: labelX, y: y2 + 3.5, class: "ranklab" });
-        lab.style.fill = e.col; lab.textContent = `${j + 1}. ${e.it.name}  ${fmt(e.v)}`; svg.appendChild(lab);
+        lab.style.fill = e.col; lab.textContent = `${j + 1}. ${e.it.name}  ${fmt2(e.v)}`; svg.appendChild(lab);
       });
     });
     const host = document.getElementById(cfg.hostId); if (host) host.appendChild(svg);
