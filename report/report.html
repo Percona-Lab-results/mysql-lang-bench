@@ -506,7 +506,7 @@ const PAGE_BARS = false;
     const items = cfg.items, S = items.length, T = cfg.T, NT = T.length;
     const COLS = 4, ROWS = Math.ceil(NT / COLS);
     const BW = 1400, ML = 58, MR = 14, CW = (BW - ML - MR) / COLS;
-    const TITLE_H = 26, PLOT_H = 400, ROW_B = 30, RH = TITLE_H + PLOT_H + ROW_B, TOP = 8;
+    const TITLE_H = 26, PLOT_H = 400, ROW_B = 30, RH = TITLE_H + PLOT_H + ROW_B, TOP = 22;  // TOP leaves room for the type legend
     const BH = TOP + ROWS * RH;
     const OFF = 6, BARW = 3 * OFF, CHW = 5;   // bar width = 3x the step; each shorter bar shifted right by OFF
     const svg = el("svg", { viewBox: `0 0 ${BW} ${BH}`, role: "img", "aria-label": cfg.ariaLabel });
@@ -517,18 +517,19 @@ const PAGE_BARS = false;
       const s0 = el("stop", { offset: "0", "stop-color": "#000", "stop-opacity": "0" });
       const s1 = el("stop", { offset: "1", "stop-color": "#000", "stop-opacity": "0.22" });
       g.append(s0, s1); defs.appendChild(g); svg.appendChild(defs); }
-    // Heat-map colour by performance within the column (same rule as bars.html):
-    // wide spread (>50%) -> green..red by rank; tight group -> hue shifts only by
-    // each bar's shortfall from the column's best (red at a 50% deficit).
-    const heat = (vals) => {
-      const n = vals.length, best = vals[0], worst = vals[n - 1];
-      const byRank = best > 0 && (best - worst) / best > 0.5;
-      return vals.map((v, j) => {
-        const hue = byRank ? 120 * (1 - (n > 1 ? j / (n - 1) : 0))
-                           : 120 * (1 - Math.min(best > 0 ? (best - v) / best : 0, 0.5) / 0.5);
-        return `hsl(${hue.toFixed(1)}, 66%, 45%)`;
-      });
-    };
+    // Three colours by language type: native (compiled to machine code),
+    // managed (bytecode on a VM with a JIT), interpreted/scripting.
+    const LTYPE = { c: "native", cpp: "native", rust: "native", go: "native", swift: "native",
+                    java: "managed", csharp: "managed",
+                    python: "interp", php: "interp", ruby: "interp", lua: "interp", javascript: "interp", typescript: "interp" };
+    const TCOL = { native: "var(--cat-1)", managed: "var(--cat-2)", interp: "var(--cat-3)" };
+    const TNAME = { native: "native (C, C++, Rust, Go, Swift)", managed: "managed VM (Java, C#)", interp: "interpreted / scripting (Python, PHP, Ruby, Lua, JS, TS)" };
+    const typeCol = it => TCOL[LTYPE[it.lang] || "interp"];
+    // Legend along the top.
+    { let lx = ML; for (const k of ["native", "managed", "interp"]) {
+        svg.appendChild(el("rect", { x: lx, y: 0, width: 14, height: 11, fill: TCOL[k] }));
+        const t = el("text", { x: lx + 18, y: 9.5 }); t.textContent = TNAME[k]; svg.appendChild(t);
+        lx += 18 + TNAME[k].length * 5.6 + 22; } }
     const step = cfg.yMax / 5;
     T.forEach((t, ti) => {
       const c = ti % COLS, r = Math.floor(ti / COLS);
@@ -548,8 +549,7 @@ const PAGE_BARS = false;
       svg.appendChild(el("line", { x1: bx0 - 6, x2: bx0 + GW + 6, y1: pb, y2: pb, stroke: "var(--baseline)", "stroke-width": 1 }));
       // Flat equal-width bars, tallest first; each shorter one drawn on top,
       // shifted OFF px right, so the height differences read as a staircase.
-      const cols = heat(ranked.map(e => e.v));
-      ranked.forEach((e, j) => { e.col = cols[j]; });
+      ranked.forEach(e => { e.col = typeCol(e.it); });
       const tops = [];
       ranked.forEach((e, j) => {
         const yt = Y(e.v), h = Math.max(1, pb - yt);
@@ -694,7 +694,7 @@ const PAGE_BARS = false;
     });
     // Ranked bars (ranked.html): best = tallest + widest, connectors to labels.
     if (document.getElementById(`chart-w${w}-rank`)) {
-      const items = shown.map(s => ({ name: labelOf(s), vals: s.thr, value: Math.max(...s.thr.filter(v => v != null)), st: stOf(s) }))
+      const items = shown.map(s => ({ name: labelOf(s), lang: s.lang, vals: s.thr, value: Math.max(...s.thr.filter(v => v != null)), st: stOf(s) }))
         .sort((a, b) => b.value - a.value);
       rankChart({ hostId: `chart-w${w}-rank`, items, T: M.threads, yMax: niceMax(peak), unit: M.unit,
                   ariaLabel: `${M.title}: languages ranked by best throughput, nested bars per worker count` });
