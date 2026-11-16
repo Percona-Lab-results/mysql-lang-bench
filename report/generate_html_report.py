@@ -101,22 +101,17 @@ def build_workload(latest, w):
     series = []
     for lang, variant in groups:
         thr = []
-        cpu = []   # total (client+server) CPU microseconds per operation
-        scpu = []  # server (mysqld) CPU microseconds per operation
+        cpu = []   # client (benchmark process) CPU microseconds per operation
         for t in threads:
             r = latest.get((w, lang, variant, t))
             thr.append(round(r["throughput"], 1) if r else None)
             if r:
                 unit = r.get("unit", unit)
                 ops = r.get("ops") or 0
-                cc = r.get("client_cpu_s"); sc = r.get("server_cpu_s")
-                if ops and cc is not None and sc is not None:
-                    cpu.append(round((cc + sc) * 1e6 / ops, 2))
-                    scpu.append(round(sc * 1e6 / ops, 2))
-                else:
-                    cpu.append(None); scpu.append(None)
+                cc = r.get("client_cpu_s")
+                cpu.append(round(cc * 1e6 / ops, 2) if (ops and cc is not None) else None)
             else:
-                cpu.append(None); scpu.append(None)
+                cpu.append(None)
         if any(v is not None for v in thr):
             series.append({
                 "lang": lang,
@@ -124,7 +119,6 @@ def build_workload(latest, w):
                 "variant": "stock" if variant is False else ("tuned" if variant is True else "na"),
                 "thr": thr,
                 "cpu": cpu,
-                "scpu": scpu,
                 "peak": max(v for v in thr if v is not None),
             })
     if not series:
@@ -188,8 +182,8 @@ def main():
     {tabs}
   </section>
   <section id="sec-{sid}-cpu">
-    <h2>{m['title']} — CPU cost</h2>
-    <p class="sub">Total CPU consumed per operation (benchmark client + mysqld server), in microseconds of CPU per {'row' if w in (1,2) else 'blob'}, one line per language. The shaded band is the MySQL <strong>server</strong>-CPU range (min&ndash;max across languages) — the common server-side cost; the gap from the band up to a language's line is that language's client-side CPU. Lower is cheaper; combining both sides, it can exceed wall-clock time per op when work runs on many cores.</p>
+    <h2>{m['title']} — client CPU cost</h2>
+    <p class="sub">Client-side CPU consumed per operation (the benchmark process, user+sys), in microseconds of CPU per {'row' if w in (1,2) else 'blob'}, one line per language. Lower is cheaper. The MySQL server's own CPU is excluded — it is essentially the same per transaction across languages, so this isolates each language/driver's own CPU cost.</p>
     <div class="legend" id="legend-{sid}-cpu"></div>
     <div class="bigchart" id="chart-{sid}-cpu"></div>
   </section>"""
@@ -709,32 +703,16 @@ const PAGE_BARS = __PAGE_BARS__;
       peak: peak, unit: M.unit, sortGroup: PAGE_BARS, labelName: PAGE_BARS,
       ariaLabel: `${M.title}: throughput grouped by worker count`,
     });
-    // CPU-cost line chart (us of client+server CPU per operation) with a shaded
-    // band for the MySQL server-CPU range (min..max across languages).
+    // Client CPU-cost line chart (us of benchmark-process CPU per operation).
     if (document.getElementById(`chart-w${w}-cpu`)) {
-      const cshown = shown.filter(s => s.cpu && s.cpu.some(v => v != null));
-      const cdefs = cshown.map(s => ({ name: labelOf(s), vals: s.cpu, st: stOf(s) }));
-      // Server-CPU range at each worker count (the band).
-      const lo = [], hi = [];
-      for (let i = 0; i < M.threads.length; i++) {
-        const sv = cshown.map(s => s.scpu && s.scpu[i]).filter(v => v != null);
-        lo.push(sv.length ? Math.min(...sv) : null);
-        hi.push(sv.length ? Math.max(...sv) : null);
-      }
+      const cdefs = shown.filter(s => s.cpu && s.cpu.some(v => v != null))
+        .map(s => ({ name: labelOf(s), vals: s.cpu, st: stOf(s) }));
       legendInto(`legend-w${w}-cpu`, cdefs.map(d => ({ name: d.name, key: keySVG(d.st, 26, 12) })));
-      const cleg = document.getElementById(`legend-w${w}-cpu`);
-      if (cleg) {
-        const item = document.createElement("span"); item.className = "item";
-        const sw = el("svg", { width: 26, height: 12, viewBox: "0 0 26 12", "aria-hidden": "true" });
-        sw.appendChild(el("rect", { x: 1, y: 2, width: 24, height: 8, rx: 2, fill: "var(--band)", "fill-opacity": "0.5" }));
-        item.appendChild(sw); item.appendChild(document.createTextNode("MySQL server CPU (range across langs)"));
-        cleg.insertBefore(item, cleg.firstChild);
-      }
       const cpeak = Math.max(...cdefs.flatMap(d => d.vals.filter(v => v != null)), 0.001);
       bigChart({
         hostId: `chart-w${w}-cpu`, T: M.threads, seriesDefs: cdefs,
-        yMax: niceMax(cpeak), unit: "µs CPU/op", fmtY: fmtCpu, band: { lo, hi },
-        ariaLabel: `${M.title}: CPU cost per operation by worker count`,
+        yMax: niceMax(cpeak), unit: "µs client CPU/op", fmtY: fmtCpu,
+        ariaLabel: `${M.title}: client CPU cost per operation by worker count`,
       });
     }
   }
