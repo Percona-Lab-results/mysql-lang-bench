@@ -328,7 +328,7 @@ def main():
         rank_sections += f"""
   <section id="sec-{sid}-rank">
     <h2>{m['title']} — ranked</h2>
-    <p class="sub">One column per worker count. In each column the languages are overlapping bars ({m['unit']}) of equal width, tallest first: each next-slower language is drawn on top and stepped a few pixels to the right, so the height difference between neighbours stays visible as a staircase. Bars are coloured by language type &mdash; native, managed VM, or interpreted/scripting (legend at top). Beside the bars the languages are listed by rank, evenly spaced, each joined to its bar top by a thin right-angled connector. All columns share one scale.</p>
+    <p class="sub">One column per worker count. In each column the languages are overlapping bars ({m['unit']}) of equal width, tallest first: each next-slower language is drawn on top and stepped a few pixels to the right, so the height difference between neighbours stays visible as a staircase (where neighbours are within a couple of pixels, bar heights are nudged apart slightly; the labels show the true values). Bars are coloured by language type &mdash; native, managed VM, or interpreted/scripting (legend at top). Beside the bars the languages are listed by rank, evenly spaced, each joined to its bar top by a thin right-angled connector. All columns share one scale.</p>
     <div class="bigchart" id="chart-{sid}-rank"></div>
   </section>"""
         png_ann.append(f"{sid}-ann")
@@ -919,9 +919,18 @@ const PAGE_BARS = __PAGE_BARS__;
       // Flat equal-width bars, tallest first; each shorter one drawn on top,
       // shifted OFF px right, so the height differences read as a staircase.
       ranked.forEach(e => { e.col = typeCol(e.it); });
+      // Visual nudge: neighbouring bars whose tops would be closer than MINGAP
+      // px are pushed apart (shorter one down, cascading) so every step stays
+      // visible; if the cascade would run past the baseline the whole stack is
+      // lifted by the overflow. Labels and tooltips keep the true values.
+      const MINGAP = 3;
+      const yts = ranked.map(e => Y(e.v));
+      for (let j = 1; j < yts.length; j++) if (yts[j] - yts[j-1] < MINGAP) yts[j] = yts[j-1] + MINGAP;
+      const over = yts.length ? yts[yts.length-1] - (pb - 1) : 0;
+      if (over > 0) for (let j = 0; j < yts.length; j++) yts[j] -= over;
       const tops = [];
       ranked.forEach((e, j) => {
-        const yt = Y(e.v), h = Math.max(1, pb - yt);
+        const yt = yts[j], h = Math.max(1, pb - yt);
         const w = BARW, bx = bx0 + j * OFF;
         if (j > 0) {   // shadow onto the taller bar to the left, along this bar's height
           svg.appendChild(el("rect", { x: bx - 4, y: yt, width: 4, height: h, fill: `url(#${shId})` }));

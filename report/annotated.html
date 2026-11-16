@@ -470,9 +470,18 @@ const PAGE_BARS = false;
       // Flat equal-width bars, tallest first; each shorter one drawn on top,
       // shifted OFF px right, so the height differences read as a staircase.
       ranked.forEach(e => { e.col = typeCol(e.it); });
+      // Visual nudge: neighbouring bars whose tops would be closer than MINGAP
+      // px are pushed apart (shorter one down, cascading) so every step stays
+      // visible; if the cascade would run past the baseline the whole stack is
+      // lifted by the overflow. Labels and tooltips keep the true values.
+      const MINGAP = 3;
+      const yts = ranked.map(e => Y(e.v));
+      for (let j = 1; j < yts.length; j++) if (yts[j] - yts[j-1] < MINGAP) yts[j] = yts[j-1] + MINGAP;
+      const over = yts.length ? yts[yts.length-1] - (pb - 1) : 0;
+      if (over > 0) for (let j = 0; j < yts.length; j++) yts[j] -= over;
       const tops = [];
       ranked.forEach((e, j) => {
-        const yt = Y(e.v), h = Math.max(1, pb - yt);
+        const yt = yts[j], h = Math.max(1, pb - yt);
         const w = BARW, bx = bx0 + j * OFF;
         if (j > 0) {   // shadow onto the taller bar to the left, along this bar's height
           svg.appendChild(el("rect", { x: bx - 4, y: yt, width: 4, height: h, fill: `url(#${shId})` }));
