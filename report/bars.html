@@ -404,6 +404,70 @@ const PAGE_BARS = true;
     tooltip.style.display = "block"; moveTip(ev);
   }
 
+  // Ranked vertical bars: items sorted best->worst left->right. Height encodes
+  // the value and width encodes the rank (best = widest), so the best performer
+  // is the tallest AND widest bar. Labels sit on the right, evenly spaced
+  // vertically; each bar top connects to its label with a thin right-angled
+  // connector (horizontal -> vertical -> horizontal). Crossings are avoided by
+  // routing connectors through two channel groups: bars whose top is ABOVE
+  // their label ("down" connectors) get channels ordered best-rightmost, bars
+  // whose top is BELOW their label ("up" connectors) get channels ordered
+  // best-leftmost. Within a group that ordering is crossing-free, and a down
+  // connector can never cross an up connector, so no two connectors intersect.
+  function rankChart(cfg) {
+    const items = cfg.items, S = items.length;
+    const BW = 1120, BH = 560, BM = { l: 64, r: 236, t: 20, b: 40 };
+    const CHW = 9, chanRegion = S*CHW + 20;
+    const barsRight = BW - BM.r - chanRegion;
+    const BIW = barsRight - BM.l, BIH = BH - BM.t - BM.b;
+    const WMAX = 62, WMIN = 14, GAP = 10;
+    const widths = items.map((_, k) => S > 1 ? WMAX - (WMAX - WMIN) * k / (S - 1) : WMAX);
+    const total = widths.reduce((a, b) => a + b, 0) + GAP * (S - 1);
+    const sc = Math.min(1, BIW / total);
+    const Y = v => BM.t + BIH - (v / cfg.yMax) * BIH;
+    const svg = el("svg", { viewBox: `0 0 ${BW} ${BH}`, role: "img", "aria-label": cfg.ariaLabel });
+    // Horizontal gridlines + y tick labels.
+    const step = cfg.yMax / 5;
+    for (let k = 0; k <= 5; k++) { const tv = step * k;
+      svg.appendChild(el("line", { x1: BM.l, x2: barsRight, y1: Y(tv), y2: Y(tv), stroke: "var(--grid)", "stroke-width": 1 }));
+      const t = el("text", { x: BM.l - 6, y: Y(tv) + 3.5, "text-anchor": "end" }); t.textContent = tv === 0 ? "0" : fmt(tv); svg.appendChild(t); }
+    svg.appendChild(el("line", { x1: BM.l, x2: barsRight, y1: BM.t + BIH, y2: BM.t + BIH, stroke: "var(--baseline)", "stroke-width": 1 }));
+    // Bars.
+    let x = BM.l + (BIW - total * sc) / 2;
+    const tops = [];
+    items.forEach((it, k) => {
+      const w = widths[k] * sc, yt = Y(it.value), h = Math.max(1, BM.t + BIH - yt);
+      const r = el("rect", { x: x, y: yt, width: w, height: h, rx: Math.min(3, w/2), ry: Math.min(3, w/2), fill: it.st.color, "fill-opacity": "0.92" });
+      r.style.cursor = "crosshair";
+      r.addEventListener("pointerenter", ev => showBar(ev, "peak", it, it.value, cfg.unit));
+      r.addEventListener("pointermove", moveTip);
+      r.addEventListener("pointerleave", hideTip);
+      svg.appendChild(r);
+      const rk = el("text", { x: x + w/2, y: BM.t + BIH + 14, "text-anchor": "middle" }); rk.textContent = k + 1; svg.appendChild(rk);
+      tops.push({ x: x + w, y: yt });
+      x += w + GAP * sc;
+    });
+    // Evenly spaced labels on the right.
+    const labelX = BW - BM.r + 26;
+    const ly = k => S > 1 ? BM.t + 8 + k * (BIH - 16) / (S - 1) : BM.t + BIH / 2;
+    // Channel assignment (see routing note above).
+    const down = [], up = [];
+    items.forEach((_, k) => (tops[k].y <= ly(k) ? down : up).push(k));
+    const chanX = {};
+    let slot = 0;
+    for (const k of up) chanX[k] = barsRight + 12 + (slot++) * CHW;           // best-leftmost
+    for (const k of down.slice().reverse()) chanX[k] = barsRight + 12 + (slot++) * CHW; // best-rightmost
+    items.forEach((it, k) => {
+      const t = tops[k], cx = chanX[k], y2 = ly(k);
+      const p = el("path", { d: `M ${t.x.toFixed(1)} ${t.y.toFixed(1)} H ${cx.toFixed(1)} V ${y2.toFixed(1)} H ${(labelX - 7).toFixed(1)}`,
+                              fill: "none", "stroke-width": 1, "stroke-linejoin": "miter", "stroke-opacity": "0.85" });
+      p.style.stroke = it.st.color; svg.appendChild(p);
+      const lab = el("text", { x: labelX, y: y2 + 3.8, class: "seriesname" });
+      lab.style.fill = it.st.color; lab.textContent = `${k + 1}. ${it.name}  ${fmt(it.value)}`; svg.appendChild(lab);
+    });
+    const host = document.getElementById(cfg.hostId); if (host) host.appendChild(svg);
+  }
+
   // Grouped horizontal bar chart: one group per worker count (512 at top down to
   // 4 at the bottom), one colored bar per language inside each group, throughput
   // along the x-axis with vertical gridlines and a value label at each bar tip.
@@ -511,6 +575,13 @@ const PAGE_BARS = true;
       peak: peak, unit: M.unit, sortGroup: PAGE_BARS, labelName: PAGE_BARS,
       ariaLabel: `${M.title}: throughput grouped by worker count`,
     });
+    // Ranked bars (ranked.html): best = tallest + widest, connectors to labels.
+    if (document.getElementById(`chart-w${w}-rank`)) {
+      const items = shown.map(s => ({ name: labelOf(s), value: Math.max(...s.thr.filter(v => v != null)), st: stOf(s) }))
+        .sort((a, b) => b.value - a.value);
+      rankChart({ hostId: `chart-w${w}-rank`, items, yMax: niceMax(peak), unit: M.unit,
+                  ariaLabel: `${M.title}: languages ranked by best throughput` });
+    }
     // Annotated line chart (annotated.html): every node labelled in the gap.
     if (document.getElementById(`chart-w${w}-ann`)) {
       legendInto(`legend-w${w}-ann`, shown.map(s => ({ name: labelOf(s), key: keySVG(stOf(s), 26, 12) })));
