@@ -476,22 +476,22 @@ const PAGE_BARS = true;
     r.setAttribute("data-theme", dark ? "light" : "dark");
   });
 
-  // Deep-linking: ?workload=N focuses a workload's section; ?table=1 also opens
-  // that workload's table view. Opening/closing a table updates the URL so it
-  // can be copied/shared, and on load we scroll to the targeted place.
+  // Deep-linking: ?workload=N focuses a workload's throughput section;
+  // ?cpu=1 targets that workload's CPU-cost chart instead; ?table=1 also opens
+  // its table view. Opening/closing a table updates the URL so it can be
+  // copied/shared, and on load we scroll to the targeted place.
   const secIdFor = n => PAGE_BARS ? `sec-w${n}-bars` : `sec-w${n}`;
   if (!pngMatch) {
     const q = new URLSearchParams(location.search);
     const wl = parseInt(q.get("workload") || "", 10);
     const tableOn = q.get("table") === "1";
+    const cpuOn = q.get("cpu") === "1";
     const tbl = (!PAGE_BARS && wl >= 1) ? document.getElementById(`tables-w${wl}`) : null;
-    if (tableOn && tbl) {
-      tbl.open = true;
-      requestAnimationFrame(() => tbl.scrollIntoView({ block: "start" }));
-    } else if (wl >= 1) {
-      const sec = document.getElementById(secIdFor(wl));
-      if (sec) requestAnimationFrame(() => sec.scrollIntoView({ block: "start" }));
-    }
+    let target = null;
+    if (tableOn && tbl) { tbl.open = true; target = tbl; }
+    else if (cpuOn && wl >= 1 && !PAGE_BARS) target = document.getElementById(`sec-w${wl}-cpu`);
+    else if (wl >= 1) target = document.getElementById(secIdFor(wl));
+    if (target) requestAnimationFrame(() => target.scrollIntoView({ block: "start" }));
   }
   for (const d of document.querySelectorAll("details.tables")) {
     d.addEventListener("toggle", () => {
