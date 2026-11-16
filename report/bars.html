@@ -61,8 +61,7 @@
   svg .grouplabel { fill: var(--text-secondary); font-weight: 700; font-size: 11.5px; }
   svg .barval { fill: var(--muted); font-size: 9.5px; }
   svg .barvalin { fill: #ffffff; font-size: 9.5px; font-weight: 600; }
-  svg .nodelabel { font-size: 9.5px; font-weight: 650; paint-order: stroke; stroke: var(--surface-1);
-    stroke-width: 3px; stroke-linejoin: round; }
+  svg .nodelabel { font-size: 9.5px; font-weight: 650; }
   #tooltip { position: fixed; pointer-events: none; z-index: 10; display: none;
     background: var(--surface-1); border: 1px solid var(--border); border-radius: 8px;
     box-shadow: 0 4px 14px rgba(0,0,0,0.18); padding: 8px 11px; font-size: 12.5px; min-width: 150px; }
@@ -251,6 +250,7 @@ const PAGE_BARS = true;
   function bigChart(cfg) {
     const T = cfg.T, N = T.length;
     const FY = cfg.fmtY || fmt;   // y-axis + end-label number format
+    const nodeLabelEls = [];      // per-node annotation texts (get backing plates after mount)
     const BW = 1120, BH = cfg.height || 540, BM = { l: 64, r: 184, t: 14, b: 32 };
     const BIW = BW-BM.l-BM.r, BIH = BH-BM.t-BM.b;
     const X = i => BM.l + i*BIW/(N-1);
@@ -308,16 +308,18 @@ const PAGE_BARS = true;
         const topOver = items.length ? (BM.t + 5) - items[0].y : 0;
         if (topOver > 0) { items[0].y += topOver;
           for (let k = 1; k < items.length; k++) if (items[k].y - items[k-1].y < GAPN) items[k].y = items[k-1].y + GAPN; }
-        const lx = X(i) + 10;
+        // Label text starts a clear gap past the node (marker radius 6 + 10px).
+        const lx = X(i) + 16;
         for (const L of items) {
           if (Math.abs(L.y - L.y0) > 2.5) {
-            const ldr = el("line", { x1: X(i)+6.5, y1: L.y0, x2: lx-2, y2: L.y, "stroke-width": 0.9, "stroke-opacity": "0.6" });
+            const ldr = el("line", { x1: X(i)+7, y1: L.y0, x2: lx-4, y2: L.y, "stroke-width": 0.9, "stroke-opacity": "0.6" });
             ldr.style.stroke = L.d.st.color; svg.appendChild(ldr);
           }
           const t = el("text", { x: lx, y: L.y + 3.3, class: "nodelabel" });
           t.style.fill = L.d.st.color;
           t.textContent = L.d.name + " " + FY(L.d.vals[i]);
           svg.appendChild(t);
+          nodeLabelEls.push(t);
         }
       }
     }
@@ -369,6 +371,14 @@ const PAGE_BARS = true;
         const i = Math.min(N-1, Math.max(0, idx + (ev.key==="ArrowRight"?1:-1))); const r = svg.getBoundingClientRect();
         show(i, r.left+(X(i)*r.width/BW), r.top+r.height/3); } else if (ev.key==="Escape") hide(); });
     const host = document.getElementById(cfg.hostId); if (host) host.appendChild(svg);
+    // Semi-transparent backing plate behind each node label, sized from the
+    // rendered text (getBBox needs the SVG in the document, hence after append).
+    for (const t of nodeLabelEls) {
+      const b = t.getBBox();
+      const bg = el("rect", { x: b.x-3, y: b.y-1.5, width: b.width+6, height: b.height+3, rx: 3, ry: 3,
+                              fill: "var(--surface-1)", "fill-opacity": "0.72" });
+      svg.insertBefore(bg, t);
+    }
   }
 
   // --- Shared tooltip helpers for the per-mark bar hover layer. ---
