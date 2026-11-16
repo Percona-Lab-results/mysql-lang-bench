@@ -61,7 +61,7 @@
   svg .grouplabel { fill: var(--text-secondary); font-weight: 700; font-size: 11.5px; }
   svg .barval { fill: var(--muted); font-size: 9.5px; }
   svg .barvalin { fill: #ffffff; font-size: 9.5px; font-weight: 600; }
-  svg .nodelabel { font-size: 9.5px; font-weight: 650; }
+  svg .nodelabel { font-size: 11px; font-weight: 650; }
   #tooltip { position: fixed; pointer-events: none; z-index: 10; display: none;
     background: var(--surface-1); border: 1px solid var(--border); border-radius: 8px;
     box-shadow: 0 4px 14px rgba(0,0,0,0.18); padding: 8px 11px; font-size: 12.5px; min-width: 150px; }
@@ -295,12 +295,11 @@ const PAGE_BARS = true;
     }
     svg.appendChild(lines);
     if (cfg.nodeLabels) {
-      const PAD = 9;   // leave a clear window around each node column
-      for (let i = 0; i < N-1; i++) {
-        svg.appendChild(el("rect", { x: X(i)+PAD, y: BM.t, width: X(i+1)-X(i)-2*PAD, height: BIH, rx: 4, ry: 4,
-                                     fill: "var(--surface-1)", "fill-opacity": "0.74",
-                                     stroke: "var(--baseline)", "stroke-width": 1 }));
-      }
+      // One translucent panel over the whole plot: lines beneath it are dimmed,
+      // markers and labels are drawn on top of it.
+      svg.appendChild(el("rect", { x: BM.l, y: BM.t, width: BIW, height: BIH, rx: 4, ry: 4,
+                                   fill: "var(--surface-1)", "fill-opacity": "0.74",
+                                   stroke: "var(--baseline)", "stroke-width": 1 }));
     }
     svg.appendChild(marks);
     // Per-node annotations: in the horizontal gap to the right of each worker
@@ -309,7 +308,7 @@ const PAGE_BARS = true;
     // label that had to move away from its node gets a thin leader line from
     // the node to the label. The last node keeps the end-label treatment below.
     if (cfg.nodeLabels) {
-      const GAPN = 11.5;
+      const GAPN = 14.5;   // vertical spacing between stacked annotations
       for (let i = 0; i < N-1; i++) {
         const items = cfg.seriesDefs.filter(d => d.vals[i] != null)
           .map(d => ({ d, y0: Y(d.vals[i]), y: Y(d.vals[i]) }));
