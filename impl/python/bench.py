@@ -1,18 +1,18 @@
 #!/usr/bin/env python3
-"""MySQL language benchmark - Python implementation (mysqlclient / MySQLdb).
+"""MySQL language benchmark - Python implementation (mysql-connector-python).
 
 Follows SPEC.md v3 exactly: one of four micro-workloads selected by
 BENCH_WORKLOAD (1..4), run by BENCH_THREADS concurrent OS threads. Each worker
-owns its own MySQLdb connection (autocommit ON, TLS disabled via
-ssl_mode=DISABLED), its own 31-bit LCG PRNG stream seeded BENCH_SEED + index,
-and its own latency array (per-operation, integer microseconds). Workers
-connect and prepare outside a start barrier; main releases the barrier, samples
-a monotonic clock, joins, and prints one JSON result line on stdout.
+owns its own connection (autocommit ON, TLS disabled via ssl_disabled=True), its
+own 31-bit LCG PRNG stream seeded BENCH_SEED + index, and its own latency array
+(per-operation, integer microseconds). Workers connect and prepare outside a
+start barrier; main releases the barrier, samples a monotonic clock, joins, and
+prints one JSON result line on stdout.
 
-mysqlclient formats parameters client-side (no server-side prepared
-statements), so the result reports prepared=false. It releases the GIL during
-network I/O; GIL contention at high thread counts is authentic Python
-behaviour.
+Unlike mysqlclient, mysql-connector-python supports real server-side prepared
+statements: every worker uses a `cursor(prepared=True)`, so parameters (including
+the 1 MiB blob in workload 3) go over the binary protocol instead of being
+escaped into SQL text client-side. The result reports prepared=true.
 
 The four workloads (per-worker counts; nothing shared/divided across workers):
   1 int-insert : BENCH_INT_ROWS rows via one multi-row INSERT of BENCH_INT_BATCH
@@ -40,7 +40,7 @@ import sys
 import threading
 import time
 
-import MySQLdb
+import mysql.connector
 
 # 31-bit LCG (SPEC "PRNG — per worker"): state = (state*MUL + INC) mod 2^31.
 # mod 2^31 == & MASK (keep low 31 bits). Validation (seed 42, worker 0): first
@@ -99,12 +99,13 @@ class Worker(threading.Thread):
 
     def work(self):
         # Connection and statement prep happen outside the timed window.
-        # ssl_mode DISABLED: libmysqlclient defaults to PREFERRED, which would
-        # put this driver on TLS while other languages run plaintext.
-        conn = MySQLdb.connect(ssl_mode="DISABLED", **self.conn_args)
+        # ssl_disabled: other languages run plaintext; keep this driver plaintext
+        # too. autocommit ON so each statement commits on its own (SPEC).
+        conn = mysql.connector.connect(autocommit=True, ssl_disabled=True,
+                                       **self.conn_args)
         try:
-            conn.autocommit(True)  # MySQLdb defaults autocommit OFF
-            cur = conn.cursor()
+            # Server-side prepared statement cursor (binary protocol).
+            cur = conn.cursor(prepared=True)
 
             dispatch = {
                 1: self._wl1_int_insert,
@@ -123,10 +124,9 @@ class Worker(threading.Thread):
     def _wl1_int_insert(self, cur):
         batch = self.cfg["int_batch"]
         execs = self.cfg["int_rows"] // batch
-        # ONE multi-row INSERT string reused for every execute. mysqlclient
-        # formats the parameters client-side (prepared=false). Each bound value
-        # is a fresh next() cast to a signed 32-bit int; the LCG yields values
-        # in [0, 2^31-1], all of which already fit a signed 32-bit INT.
+        # ONE multi-row INSERT prepared once and re-executed. Each bound value is
+        # a fresh next() cast to a signed 32-bit int; the LCG yields values in
+        # [0, 2^31-1], all of which already fit a signed 32-bit INT.
         sql = "INSERT INTO bench_int (val) VALUES " + ",".join(["(%s)"] * batch)
         state = self.cfg["seed"] + self.index
         latencies = self.latencies
@@ -243,16 +243,9 @@ class ProgressMonitor(threading.Thread):
 
 
 def driver_version_string():
-    try:  # mysqlclient >= 2.3 removed MySQLdb.__version__
-        version = str(MySQLdb.__version__)
-    except AttributeError:
-        from importlib.metadata import version as pkg_version
-        version = pkg_version("mysqlclient")
-    try:
-        version = f"{version} (libmysqlclient {MySQLdb.get_client_info()})"
-    except Exception:  # noqa: BLE001
-        pass
-    return version
+    ver = getattr(mysql.connector, "__version__", "?")
+    impl = "C ext" if getattr(mysql.connector, "HAVE_CEXT", False) else "pure"
+    return f"{ver} ({impl})"
 
 
 def main():
@@ -260,8 +253,8 @@ def main():
         "host": os.environ["MYSQL_HOST"],
         "port": getenv_int("MYSQL_PORT"),
         "user": os.environ["MYSQL_USER"],
-        "passwd": os.environ["MYSQL_PASSWORD"],
-        "db": os.environ["MYSQL_DB"],
+        "password": os.environ["MYSQL_PASSWORD"],
+        "database": os.environ["MYSQL_DB"],
     }
 
     workload = getenv_int("BENCH_WORKLOAD")
@@ -349,10 +342,10 @@ def main():
         "workload": workload,
         "workload_name": workload_name,
         "unit": unit,
-        "driver": "mysqlclient",
+        "driver": "mysql-connector-python",
         "driver_version": driver_version_string(),
         "runtime_version": platform.python_version(),
-        "prepared": False,
+        "prepared": True,
         "client_host": socket.gethostname(),
         "db_host": conn_args["host"],
         "threads": threads,

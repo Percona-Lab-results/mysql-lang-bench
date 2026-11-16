@@ -1,0 +1,1 @@
+{"workload":2,"workload_name":"int-read","unit":"rows/s","threads":256,"ops":11300000,"elapsed_s":858.147,"throughput":13167.9,"partial":true}
