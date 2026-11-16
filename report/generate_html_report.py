@@ -23,6 +23,7 @@ OUT = ROOT / "report" / "report.html"
 BARS_OUT = ROOT / "report" / "bars.html"
 ANN_OUT = ROOT / "report" / "annotated.html"
 RANK_OUT = ROOT / "report" / "ranked.html"
+TB_OUT = ROOT / "report" / "tablebars.html"
 INFO_OUT = ROOT / "report" / "infographic.html"
 PNG_DIR = ROOT / "report" / "png"
 
@@ -275,6 +276,80 @@ def build_infographic(workloads):
     return callouts + legend + '<div class="stack">' + "".join(panels) + "</div>"
 
 
+def spark(vals, vmax, color, w=96, h=22):
+    """Tiny inline SVG trend line of a row's values across worker counts."""
+    pts = [v for v in vals if v is not None]
+    if len(pts) < 2 or vmax <= 0:
+        return ""
+    n = len(vals)
+    xs = [(i * (w - 6) / (n - 1)) + 3 for i in range(n)]
+    poly = " ".join(f"{xs[i]:.1f},{(h - 3 - (v / vmax) * (h - 6)):.1f}"
+                    for i, v in enumerate(vals) if v is not None)
+    last = max(i for i, v in enumerate(vals) if v is not None)
+    ly = h - 3 - (vals[last] / vmax) * (h - 6)
+    return (f'<svg class="spark" width="{w}" height="{h}" viewBox="0 0 {w} {h}" aria-hidden="true">'
+            f'<polyline points="{poly}" fill="none" stroke="{color}" stroke-width="1.6" '
+            f'stroke-linejoin="round" stroke-linecap="round"/>'
+            f'<circle cx="{xs[last]:.1f}" cy="{ly:.1f}" r="2.2" fill="{color}"/></svg>')
+
+
+def build_tablebars(workloads):
+    """Table + bars: rows = languages (ranked by best), columns = worker counts;
+    every cell shows the exact value AND a bar proportional to it on one shared
+    scale per workload, so exact figures and magnitude read together. Column
+    winners are marked; a trend sparkline closes each row."""
+    TB_THREADS = (8, 32, 128, 512)   # the worker counts shown on this page
+    out = []
+    for w in (1, 2, 3, 4):
+        if w not in workloads:
+            continue
+        m = workloads[w]
+        idx = [m["threads"].index(t) for t in TB_THREADS if t in m["threads"]]
+        threads = [m["threads"][i] for i in idx]
+        if not threads:
+            continue
+        # Per-series values restricted to the shown columns; rank by best of those.
+        rows_data = []
+        for s in m["series"]:
+            vals = [s["thr"][i] for i in idx]
+            present = [v for v in vals if v is not None]
+            if present:
+                rows_data.append((s, vals, max(present)))
+        rows_data.sort(key=lambda r: -r[2])
+        vmax = max((v for _, vals, _ in rows_data for v in vals if v is not None), default=1) or 1
+        col_best = []
+        for c in range(len(threads)):
+            vals = [r[1][c] for r in rows_data if r[1][c] is not None]
+            col_best.append(max(vals) if vals else None)
+        head = "".join(f'<th class="num">{t}</th>' for t in threads)
+        rows = ""
+        for rank, (s, vals, best) in enumerate(rows_data):
+            color = f"var(--cat-{SLOT.get(s['lang'], 1)})"
+            cells = ""
+            for c, v in enumerate(vals):
+                if v is None:
+                    cells += '<td class="cell"><span class="none">–</span></td>'
+                    continue
+                pct = max(0.6, v / vmax * 100)
+                win = ' win' if col_best[c] and v >= col_best[c] * 0.999 else ''
+                cells += (f'<td class="cell{win}"><div class="bar" style="width:{pct:.1f}%;background:{color}"></div>'
+                          f'<span class="val">{"<span class=star>&#9733;</span> " if win else ""}{pf(v)}</span></td>')
+            rows += (f'<tr><td class="rank">{rank + 1}</td>'
+                     f'<td class="lang"><span class="dot" style="background:{color}"></span>{s["name"]}</td>'
+                     f'{cells}<td class="peak">{pf(best)}</td>'
+                     f'<td class="trend">{spark(vals, vmax, color)}</td></tr>')
+        icon, title, unit = INFO_WL[w]
+        out.append(
+            f'<section class="panel"><div class="phead"><span class="icon">{icon}</span>'
+            f'<div><h2>{m["title"]}</h2><div class="unit">{m["unit"]} &middot; bar length = value on one shared scale '
+            f'(full width = {pf(vmax)}) &middot; &#9733; fastest in column &middot; rows ranked by best result</div></div></div>'
+            f'<table class="tb"><thead><tr><th></th><th class="langh">Language</th>'
+            f'<th class="grp" colspan="{len(threads)}">concurrent workers</th><th class="peakh">best</th>'
+            f'<th class="trendh">trend {threads[0]}&rarr;{threads[-1]}</th></tr>'
+            f'<tr><th></th><th></th>{head}<th></th><th></th></tr></thead><tbody>{rows}</tbody></table></section>')
+    return "".join(out)
+
+
 def main():
     latest = load_rows()
     workloads = {}
@@ -371,6 +446,7 @@ def main():
         "MySQL client benchmark — four micro-workloads by language",
         "MySQL client benchmark — four micro-workloads by language",
         '<a class="navlink" href="infographic.html">Summary &rarr;</a>'
+        '<a class="navlink" href="tablebars.html">Table+bars &rarr;</a>'
         '<a class="navlink" href="annotated.html">Annotated &rarr;</a>'
         '<a class="navlink" href="ranked.html">Ranked &rarr;</a>'
         '<a class="navlink" href="bars.html">Bar charts &rarr;</a>')
@@ -391,6 +467,18 @@ def main():
         "MySQL client benchmark — every data point labelled",
         '<a class="navlink" href="report.html">&larr; Line charts &amp; tables</a>'
         '<a class="navlink" href="bars.html">Bar charts &rarr;</a>')
+
+    # Table + bars page.
+    tb_html = TABLEBARS_TEMPLATE
+    for k, v in {
+        "__BODY__": build_tablebars(workloads),
+        "__NLANG__": str(len(langs)),
+        "__CAT_LIGHT__": cat_css(PAL_LIGHT),
+        "__CAT_DARK__": cat_css(PAL_DARK),
+    }.items():
+        tb_html = tb_html.replace(k, v)
+    TB_OUT.write_text(tb_html)
+    print(f"written: {TB_OUT}")
 
     # Infographic summary page.
     info_html = INFOGRAPHIC_TEMPLATE
@@ -465,6 +553,10 @@ def main():
     ann_h = int(round((ANN_W - PNG_PAD) * 840 / 1400 + 230))
     for sid in png_ann:
         shoot(PNG_DIR / f"{sid}.png", f"file://{ANN_OUT}#png-{sid}", ann_h, ANN_W)
+    # Table + bars: full static page, one panel per workload (a 27px row per
+    # language + chrome), exported at 1200px wide.
+    tb_h = 340 + sum(len(m["series"]) * 27 + 110 for m in workloads.values())
+    shoot(PNG_DIR / "tablebars.png", f"file://{TB_OUT}", tb_h, 1200)
     # Infographic summary: full static page — header + stats + legend, then one
     # stacked heatmap panel per workload (a 27px row per language + chrome).
     info_h = 420 + sum(len(m["series"]) * 27 + 118 for m in workloads.values())
@@ -1230,6 +1322,79 @@ INFOGRAPHIC_TEMPLATE = r"""<!DOCTYPE html>
   </header>
   __BODY__
   <footer>Per-worker workloads, barrier-timed, Percona Server 8.4.11 tuned for write throughput (no per-commit fsync), workers 4&nbsp;&rarr;&nbsp;512 on 80-core hosts. &ldquo;Best per language&rdquo; is the peak across worker counts. Bars are coloured by language (same colours as the charts).</footer>
+</div>
+</body>
+</html>
+"""
+
+TABLEBARS_TEMPLATE = r"""<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>MySQL client benchmark — table with bars</title>
+<style>
+  .viz-root { color-scheme: light;
+    --surface-1: #fcfcfb; --page: #f6f6f3; --text-primary: #0b0b0b;
+    --text-secondary: #52514e; --muted: #898781; --grid: #e7e6df; --track: #efeeea;
+    --border: rgba(11,11,11,0.10); --gold: #e8a800;
+    --card-shadow: inset 0 1px 0 rgba(255,255,255,0.7), 0 1px 2px rgba(17,17,17,0.04), 0 14px 32px -12px rgba(17,17,17,0.16);
+    __CAT_LIGHT__ }
+  @media (prefers-color-scheme: dark) { .viz-root {
+    color-scheme: dark; --surface-1: #1a1a19; --page: #0d0d0d; --text-primary: #f0efec;
+    --text-secondary: #c3c2b7; --muted: #898781; --grid: #2c2c2a; --track: #242423;
+    --border: rgba(255,255,255,0.10); --gold: #f2c23a;
+    --card-shadow: inset 0 1px 0 rgba(255,255,255,0.06), 0 1px 2px rgba(0,0,0,0.5), 0 16px 34px -12px rgba(0,0,0,0.7);
+    __CAT_DARK__ } }
+  * { box-sizing: border-box; }
+  body.viz-root { margin: 0; background: var(--page); color: var(--text-primary);
+    font-family: system-ui, -apple-system, "Segoe UI", sans-serif; }
+  .wrap { max-width: 1180px; margin: 0 auto; padding: 30px 24px 48px; }
+  header { display: flex; justify-content: space-between; align-items: baseline; gap: 16px; flex-wrap: wrap; }
+  h1 { font-size: 25px; margin: 0; letter-spacing: -0.02em; }
+  .context { color: var(--text-secondary); margin: 7px 0 0; max-width: 78ch; }
+  .navlink { color: var(--cat-1); text-decoration: none; font-weight: 600; font-size: 14px; align-self: center; }
+  .navlink:hover { text-decoration: underline; }
+  .panel { background: var(--surface-1); border: 1px solid var(--border); border-radius: 16px;
+    padding: 16px 18px 14px; box-shadow: var(--card-shadow); margin-top: 18px; }
+  .phead { display: flex; align-items: center; gap: 12px; margin-bottom: 10px; }
+  .icon { font-size: 25px; line-height: 1; }
+  .panel h2 { font-size: 16.5px; margin: 0; font-weight: 650; letter-spacing: -0.01em; }
+  .unit { font-size: 12px; color: var(--muted); margin-top: 1px; }
+  table.tb { width: 100%; border-collapse: separate; border-spacing: 4px 3px; font-size: 12.5px; }
+  table.tb th { font-weight: 600; color: var(--muted); font-size: 11.5px; padding: 0 4px 2px; text-align: center; }
+  table.tb th.langh { text-align: left; padding-left: 4px; }
+  table.tb th.grp { color: var(--text-secondary); letter-spacing: 0.02em; text-transform: uppercase; font-size: 10.5px; }
+  table.tb th.peakh, table.tb th.trendh { color: var(--text-secondary); }
+  table.tb td { padding: 0; height: 24px; }
+  td.rank { width: 22px; text-align: center; color: var(--muted); font-size: 11px; font-weight: 600; }
+  td.lang { width: 100px; color: var(--text-secondary); font-weight: 600; white-space: nowrap; padding-left: 4px; }
+  .dot { display: inline-block; width: 9px; height: 9px; border-radius: 50%; margin-right: 6px; vertical-align: -1px; }
+  td.cell { position: relative; background: var(--track); border-radius: 4px; overflow: hidden; }
+  td.cell .bar { position: absolute; left: 0; top: 0; bottom: 0; opacity: 0.55; border-radius: 4px 0 0 4px; }
+  td.cell.win .bar { opacity: 0.9; }
+  td.cell .val { position: relative; display: block; padding: 0 7px; line-height: 24px; text-align: right;
+    font-variant-numeric: tabular-nums; font-weight: 600; color: var(--text-primary); }
+  td.cell.win .val { font-weight: 800; }
+  td.cell .star { color: var(--gold); font-size: 11px; }
+  td.cell .none { display: block; text-align: center; color: var(--muted); line-height: 24px; }
+  td.peak { width: 60px; text-align: right; padding-right: 4px; font-weight: 700; font-variant-numeric: tabular-nums; }
+  td.trend { width: 100px; text-align: center; }
+  .spark { display: block; margin: 0 auto; }
+  footer { color: var(--muted); font-size: 12px; margin-top: 24px; max-width: 86ch; }
+</style>
+</head>
+<body class="viz-root">
+<div class="wrap">
+  <header>
+    <div>
+      <h1>MySQL from __NLANG__ languages &mdash; table with bars</h1>
+      <p class="context">Exact numbers and visual scale in one view. Each row is a language (ranked by its best result), each column a worker count; every cell prints the throughput and fills with a bar proportional to it on one shared scale per workload, so you can read precise values like a table and compare magnitudes like a chart. &#9733; marks the fastest language in each column; the trend column sketches how the row scales with workers.</p>
+    </div>
+    <a class="navlink" href="report.html">Full charts &rarr;</a>
+  </header>
+  __BODY__
+  <footer>Per-worker workloads, barrier-timed, Percona Server 8.4.11 tuned for write throughput (no per-commit fsync), workers on 80-core hosts, 3-run average over different hosts. Showing the 8, 32, 128 and 512-worker columns; &ldquo;best&rdquo; is the highest of those. Bars are coloured by language (same colours as the charts).</footer>
 </div>
 </body>
 </html>
