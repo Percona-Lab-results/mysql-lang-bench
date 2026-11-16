@@ -877,7 +877,7 @@ const PAGE_BARS = __PAGE_BARS__;
     const BW = 1400, ML = 58, MR = 14, CW = (BW - ML - MR) / COLS;
     const TITLE_H = 26, PLOT_H = 400, ROW_B = 30, RH = TITLE_H + PLOT_H + ROW_B, TOP = 8;
     const BH = TOP + ROWS * RH;
-    const BARW = 60, OFF = 4, CHW = 5;   // equal bar width; each shorter bar shifted right by OFF
+    const OFF = 6, BARW = 3 * OFF, CHW = 5;   // bar width = 3x the step; each shorter bar shifted right by OFF
     const svg = el("svg", { viewBox: `0 0 ${BW} ${BH}`, role: "img", "aria-label": cfg.ariaLabel });
     const step = cfg.yMax / 5;
     T.forEach((t, ti) => {
