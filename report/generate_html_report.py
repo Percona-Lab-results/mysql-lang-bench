@@ -260,10 +260,14 @@ def main():
         return int(round(svg_px + 250))
 
     # Line charts: SVG aspect (viewBox 1120x540) scaled to the render width, plus
-    # section chrome (heading, subtitle, legend) so nothing is cropped.
-    line_h = int(round(RENDER_W * 540 / 1120 + 200))
+    # section chrome (heading, subtitle, legend). The CPU charts have a longer
+    # subtitle, so they need extra vertical room to avoid cropping the bottom.
+    svg_px = RENDER_W * 540 / 1120
+    line_h = int(round(svg_px + 200))
+    cpu_h = int(round(svg_px + 300))
     for sid in png_line:
-        shoot(PNG_DIR / f"{sid}.png", f"file://{OUT}#png-{sid}", line_h)
+        shoot(PNG_DIR / f"{sid}.png", f"file://{OUT}#png-{sid}",
+              cpu_h if sid.endswith("-cpu") else line_h)
     # Bar charts: height sized to the content (one row per language x worker-count
     # groups) so the bottom (4-worker) group is never cropped.
     for sid, n_def, n_opt, ng in png_bars:
