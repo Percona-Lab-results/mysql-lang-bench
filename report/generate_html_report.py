@@ -21,7 +21,6 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parent.parent
 OUT = ROOT / "report" / "report.html"
 BARS_OUT = ROOT / "report" / "bars.html"
-RIDGE_OUT = ROOT / "report" / "ridges.html"
 INFO_OUT = ROOT / "report" / "infographic.html"
 PNG_DIR = ROOT / "report" / "png"
 
@@ -289,10 +288,8 @@ def main():
 
     line_sections = ""
     bar_sections = ""
-    ridge_sections = ""
     png_line = []   # sid
     png_bars = []   # (sid, n_default_series, n_optimized_series, n_groups)
-    png_ridge = []  # (sid, n_series)
     for w in (1, 2, 3, 4):
         if w not in workloads:
             continue
@@ -303,7 +300,6 @@ def main():
         n_def = len([s for s in m["series"] if s["variant"] != "tuned"])
         n_opt = len([s for s in m["series"] if s["lang"] in ("go", "csharp")])
         png_bars.append((f"{sid}-bars", n_def, n_opt, len(m["threads"])))
-        png_ridge.append((f"{sid}-ridge", n_def))
         tabs = (f'<details class="tables" id="tables-{sid}" data-workload="{w}">'
                 '<summary>Table view — throughput (' + m["unit"]
                 + ')</summary><div class="tablewrap">'
@@ -321,12 +317,6 @@ def main():
     <p class="sub">Client-side CPU consumed per operation (the benchmark process, user+sys), in microseconds of CPU per {'row' if w in (1,2) else 'blob'}, one line per language. Lower is cheaper. The MySQL server's own CPU is excluded — it is essentially the same per transaction across languages, so this isolates each language/driver's own CPU cost.</p>
     <div class="legend" id="legend-{sid}-cpu"></div>
     <div class="bigchart" id="chart-{sid}-cpu"></div>
-  </section>"""
-        ridge_sections += f"""
-  <section id="sec-{sid}-ridge">
-    <h2>{m['title']} — scaling profiles</h2>
-    <p class="sub">One ridge per language: its throughput ({m['unit']}) across worker counts 4&nbsp;&rarr;&nbsp;512, fastest language on top. All ridges share one height scale, so a tall ridge is a fast language and the ridge's shape shows how it scales — climbing, plateauing, or falling off at high concurrency.</p>
-    <div class="bigchart" id="chart-{sid}-ridge"></div>
   </section>"""
         bar_sections += f"""
   <section id="sec-{sid}-bars">
@@ -360,20 +350,12 @@ def main():
         "MySQL client benchmark — four micro-workloads by language",
         "MySQL client benchmark — four micro-workloads by language",
         '<a class="navlink" href="infographic.html">Summary &rarr;</a>'
-        '<a class="navlink" href="bars.html">Bar charts &rarr;</a>'
-        '<a class="navlink" href="ridges.html">Ridgelines &rarr;</a>')
+        '<a class="navlink" href="bars.html">Bar charts &rarr;</a>')
     render_page(
         BARS_OUT, bar_sections, True,
         "MySQL client benchmark — bar charts by worker count",
         "MySQL client benchmark — bar charts by worker count",
-        '<a class="navlink" href="report.html">&larr; Line charts &amp; tables</a>'
-        '<a class="navlink" href="ridges.html">Ridgelines &rarr;</a>')
-    render_page(
-        RIDGE_OUT, ridge_sections, False,
-        "MySQL client benchmark — scaling profiles (ridgeline)",
-        "MySQL client benchmark — scaling profiles by language",
-        '<a class="navlink" href="report.html">&larr; Line charts &amp; tables</a>'
-        '<a class="navlink" href="bars.html">Bar charts &rarr;</a>')
+        '<a class="navlink" href="report.html">&larr; Line charts &amp; tables</a>')
 
     # Infographic summary page.
     info_html = INFOGRAPHIC_TEMPLATE
@@ -434,11 +416,6 @@ def main():
     # groups) so the bottom (4-worker) group is never cropped.
     for sid, n_def, n_opt, ng in png_bars:
         shoot(PNG_DIR / f"{sid}.png", f"file://{BARS_OUT}#png-{sid}", bar_px_h(n_def, ng))
-    # Ridgeline charts: SVG height depends on the number of ridges.
-    for sid, n in png_ridge:
-        rh = 18 + max(0, n - 1) * 40 + 70 + 44
-        shoot(PNG_DIR / f"{sid}.png", f"file://{RIDGE_OUT}#png-{sid}",
-              int(round(RENDER_W * rh / 1120 + 230)))
     # Infographic summary: full static page — header + stats + legend, then one
     # stacked heatmap panel per workload (a 27px row per language + chrome).
     info_h = 420 + sum(len(m["series"]) * 27 + 118 for m in workloads.values())
@@ -508,7 +485,6 @@ HTML_TEMPLATE = r"""<!DOCTYPE html>
   svg .grouplabel { fill: var(--text-secondary); font-weight: 700; font-size: 11.5px; }
   svg .barval { fill: var(--muted); font-size: 9.5px; }
   svg .barvalin { fill: #ffffff; font-size: 9.5px; font-weight: 600; }
-  svg .axisname { fill: var(--muted); font-size: 10.5px; font-style: italic; }
   #tooltip { position: fixed; pointer-events: none; z-index: 10; display: none;
     background: var(--surface-1); border: 1px solid var(--border); border-radius: 8px;
     box-shadow: 0 4px 14px rgba(0,0,0,0.18); padding: 8px 11px; font-size: 12.5px; min-width: 150px; }
@@ -784,60 +760,6 @@ const PAGE_BARS = __PAGE_BARS__;
     tooltip.style.display = "block"; moveTip(ev);
   }
 
-  // Ridgeline (joyplot): one ridge per language — its throughput across worker
-  // counts as a smooth filled curve — stacked with a vertical offset, fastest on
-  // top, sharing one height scale so ridge height compares across languages.
-  // Lower ridges are drawn last so they overlap the ones behind them.
-  function ridgeChart(cfg) {
-    const T = cfg.T, N = T.length, S = cfg.seriesDefs.length;
-    const STEP = 40, AMP = 70;                       // ridge spacing / max ridge height (1.75x overlap)
-    const BW = 1120, BM = { l: 150, r: 120, t: 18, b: 44 };
-    const BIW = BW - BM.l - BM.r;
-    const BH = BM.t + Math.max(0, S-1)*STEP + AMP + BM.b;
-    const X = i => BM.l + i*BIW/(N-1);
-    const baseY = k => BM.t + AMP + k*STEP;        // baseline of ridge k (k=0 on top)
-    const H = v => (v/cfg.yMax)*AMP;
-    const svg = el("svg", { viewBox: `0 0 ${BW} ${BH}`, role: "img", "aria-label": cfg.ariaLabel });
-    // Vertical guides at each worker count, spanning all ridges.
-    for (let i=0;i<N;i++) svg.appendChild(el("line", { x1: X(i), x2: X(i), y1: BM.t, y2: BH-BM.b+6, stroke: "var(--grid)", "stroke-width": 1 }));
-    for (let i=0;i<N;i++){ const t = el("text", { x: X(i), y: BH-BM.b+22, "text-anchor": "middle" }); t.textContent = T[i]; svg.appendChild(t); }
-    const ax = el("text", { x: X(N-1)+24, y: BH-BM.b+22, class: "axisname" }); ax.textContent = "workers"; svg.appendChild(ax);
-    // Monotone-cubic smoothing (no overshoot below the baseline between points).
-    const smooth = (pts) => {
-      const n = pts.length; if (n < 2) return "";
-      const m = new Array(n).fill(0), dx = [], dy = [], sl = [];
-      for (let i=0;i<n-1;i++){ dx.push(pts[i+1][0]-pts[i][0]); dy.push(pts[i+1][1]-pts[i][1]); sl.push(dy[i]/dx[i]); }
-      m[0]=sl[0]; m[n-1]=sl[n-2];
-      for (let i=1;i<n-1;i++) m[i] = (sl[i-1]*sl[i] <= 0) ? 0 : (sl[i-1]+sl[i])/2;
-      let d = `M ${pts[0][0].toFixed(1)} ${pts[0][1].toFixed(1)}`;
-      for (let i=0;i<n-1;i++){ const h = dx[i];
-        d += ` C ${(pts[i][0]+h/3).toFixed(1)} ${(pts[i][1]+m[i]*h/3).toFixed(1)}, ${(pts[i+1][0]-h/3).toFixed(1)} ${(pts[i+1][1]-m[i+1]*h/3).toFixed(1)}, ${pts[i+1][0].toFixed(1)} ${pts[i+1][1].toFixed(1)}`; }
-      return d;
-    };
-    // Draw back-to-front: top ridge first, bottom ridge last (on top).
-    cfg.seriesDefs.forEach((d, k) => {
-      const by = baseY(k);
-      const pts = []; for (let i=0;i<N;i++) if (d.vals[i]!=null) pts.push([X(i), by - H(d.vals[i])]);
-      if (pts.length < 2) return;
-      const top = smooth(pts);
-      const area = `${top} L ${pts[pts.length-1][0].toFixed(1)} ${by} L ${pts[0][0].toFixed(1)} ${by} Z`;
-      const fill = el("path", { d: area, fill: d.st.color, "fill-opacity": "0.82", stroke: "var(--surface-1)", "stroke-width": 1.6, "stroke-linejoin": "round" });
-      fill.style.cursor = "crosshair";
-      fill.addEventListener("pointerenter", ev => { showBar(ev, "peak", d, Math.max(...d.vals.filter(v=>v!=null)), cfg.unit); });
-      fill.addEventListener("pointermove", moveTip);
-      fill.addEventListener("pointerleave", hideTip);
-      svg.appendChild(fill);
-      // crisp top edge in the series colour
-      svg.appendChild(el("path", { d: top, fill: "none", stroke: d.st.color, "stroke-width": 1.4 }));
-      // baseline tick + language label on the left, peak value on the right
-      svg.appendChild(el("line", { x1: BM.l-6, x2: X(N-1), y1: by, y2: by, stroke: "var(--baseline)", "stroke-width": 0.6, "stroke-opacity": "0.5" }));
-      const nm = el("text", { x: BM.l-12, y: by-3, "text-anchor": "end", class: "seriesname" }); nm.style.fill = d.st.color; nm.textContent = d.name; svg.appendChild(nm);
-      const li = (()=>{ for (let i=N-1;i>=0;i--) if (d.vals[i]!=null) return i; return N-1; })();
-      const pv = el("text", { x: X(N-1)+10, y: by-3, class: "barval" }); pv.textContent = fmt(Math.max(...d.vals.filter(v=>v!=null))) + " peak"; svg.appendChild(pv);
-    });
-    const host = document.getElementById(cfg.hostId); if (host) host.appendChild(svg);
-  }
-
   // Grouped horizontal bar chart: one group per worker count (512 at top down to
   // 4 at the bottom), one colored bar per language inside each group, throughput
   // along the x-axis with vertical gridlines and a value label at each bar tip.
@@ -945,14 +867,6 @@ const PAGE_BARS = __PAGE_BARS__;
       peak: peak, unit: M.unit, sortGroup: PAGE_BARS, labelName: PAGE_BARS,
       ariaLabel: `${M.title}: throughput grouped by worker count`,
     });
-    // Ridgeline scaling profiles (ridges.html).
-    if (document.getElementById(`chart-w${w}-ridge`)) {
-      ridgeChart({
-        hostId: `chart-w${w}-ridge`, T: M.threads, seriesDefs: defs,
-        yMax: peak, unit: M.unit,
-        ariaLabel: `${M.title}: throughput profile per language across worker counts`,
-      });
-    }
     // Client CPU-cost line chart (us of benchmark-process CPU per operation).
     if (document.getElementById(`chart-w${w}-cpu`)) {
       const cdefs = shown.filter(s => s.cpu && s.cpu.some(v => v != null))
