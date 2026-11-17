@@ -293,12 +293,33 @@ def spark(vals, vmax, color, w=96, h=22):
             f'<circle cx="{xs[last]:.1f}" cy="{ly:.1f}" r="2.2" fill="{color}"/></svg>')
 
 
-def build_tablebars(workloads):
-    """Table + bars: rows = languages (ranked by best), columns = worker counts;
-    every cell shows the exact value AND a bar proportional to it on one shared
-    scale per workload, so exact figures and magnitude read together. Column
-    winners are marked; a trend sparkline closes each row."""
-    TB_THREADS = (8, 32, 128, 512)   # the worker counts shown on this page
+def pfc(v):
+    """Compact CPU-cost number (µs/op): 196k, 4,513, 52, 3.4, 0.12."""
+    if v >= 10000:
+        return f"{v/1000:.0f}k"
+    if v >= 100:
+        return f"{v:,.0f}"
+    if v >= 10:
+        return f"{v:.0f}"
+    if v >= 1:
+        return f"{v:.1f}"
+    return f"{v:.2f}"
+
+
+TB_THREADS = (8, 32, 128, 512)   # the worker counts shown on the table+bars page
+
+
+def build_tablebars(workloads, metric="thr"):
+    """Table + bars: rows = languages, columns = worker counts; every cell shows
+    the exact value AND a bar proportional to it on one shared scale per
+    workload, so exact figures and magnitude read together. Column winners are
+    marked; a trend sparkline closes each row.
+
+    metric "thr": throughput, higher is better (rows ranked by best, ★ = fastest
+    in column). metric "cpu": client CPU µs per operation, lower is better (rows
+    ranked cheapest-first, ★ = cheapest in column, shorter bar = cheaper)."""
+    cpu = metric == "cpu"
+    fmtv = pfc if cpu else pf
     out = []
     for w in (1, 2, 3, 4):
         if w not in workloads:
@@ -311,16 +332,21 @@ def build_tablebars(workloads):
         # Per-series values restricted to the shown columns; rank by best of those.
         rows_data = []
         for s in m["series"]:
-            vals = [s["thr"][i] for i in idx]
+            src = s.get("cpu") if cpu else s["thr"]
+            if not src:
+                continue
+            vals = [src[i] for i in idx]
             present = [v for v in vals if v is not None]
             if present:
-                rows_data.append((s, vals, max(present)))
-        rows_data.sort(key=lambda r: -r[2])
+                rows_data.append((s, vals, min(present) if cpu else max(present)))
+        if not rows_data:
+            continue
+        rows_data.sort(key=lambda r: r[2] if cpu else -r[2])
         vmax = max((v for _, vals, _ in rows_data for v in vals if v is not None), default=1) or 1
         col_best = []
         for c in range(len(threads)):
             vals = [r[1][c] for r in rows_data if r[1][c] is not None]
-            col_best.append(max(vals) if vals else None)
+            col_best.append((min(vals) if cpu else max(vals)) if vals else None)
         head = "".join(f'<th class="num">{t}</th>' for t in threads)
         rows = ""
         for rank, (s, vals, best) in enumerate(rows_data):
@@ -331,20 +357,34 @@ def build_tablebars(workloads):
                     cells += '<td class="cell"><span class="none">–</span></td>'
                     continue
                 pct = max(0.6, v / vmax * 100)
-                win = ' win' if col_best[c] and v >= col_best[c] * 0.999 else ''
+                cb = col_best[c]
+                is_win = cb is not None and (v <= cb * 1.001 if cpu else v >= cb * 0.999)
+                win = ' win' if is_win else ''
                 cells += (f'<td class="cell{win}"><div class="bar" style="width:{pct:.1f}%;background:{color}"></div>'
-                          f'<span class="val">{"<span class=star>&#9733;</span> " if win else ""}{pf(v)}</span></td>')
+                          f'<span class="val">{"<span class=star>&#9733;</span> " if is_win else ""}{fmtv(v)}</span></td>')
             rows += (f'<tr><td class="rank">{rank + 1}</td>'
                      f'<td class="lang"><span class="dot" style="background:{color}"></span>{s["name"]}</td>'
-                     f'{cells}<td class="peak">{pf(best)}</td>'
+                     f'{cells}<td class="peak">{fmtv(best)}</td>'
                      f'<td class="trend">{spark(vals, vmax, color)}</td></tr>')
         icon, title, unit = INFO_WL[w]
+        if cpu:
+            per = "row" if w in (1, 2) else "blob"
+            h2 = f'{m["title"]} — client CPU cost'
+            sub = (f'µs of client CPU per {per} &middot; lower is better &middot; bar length = value on one shared scale '
+                   f'(full width = {pfc(vmax)}) &middot; &#9733; cheapest in column &middot; rows ranked by lowest cost')
+            bestcol = "lowest"
+            pid = f"tb-w{w}-cpu"
+        else:
+            h2 = m["title"]
+            sub = (f'{m["unit"]} &middot; bar length = value on one shared scale '
+                   f'(full width = {pf(vmax)}) &middot; &#9733; fastest in column &middot; rows ranked by best result')
+            bestcol = "best"
+            pid = f"tb-w{w}"
         out.append(
-            f'<section class="panel" id="tb-w{w}"><div class="phead"><span class="icon">{icon}</span>'
-            f'<div><h2>{m["title"]}</h2><div class="unit">{m["unit"]} &middot; bar length = value on one shared scale '
-            f'(full width = {pf(vmax)}) &middot; &#9733; fastest in column &middot; rows ranked by best result</div></div></div>'
+            f'<section class="panel" id="{pid}"><div class="phead"><span class="icon">{icon}</span>'
+            f'<div><h2>{h2}</h2><div class="unit">{sub}</div></div></div>'
             f'<table class="tb"><thead><tr><th></th><th class="langh">Language</th>'
-            f'<th class="grp" colspan="{len(threads)}">concurrent workers</th><th class="peakh">best</th>'
+            f'<th class="grp" colspan="{len(threads)}">concurrent workers</th><th class="peakh">{bestcol}</th>'
             f'<th class="trendh">trend {threads[0]}&rarr;{threads[-1]}</th></tr>'
             f'<tr><th></th><th></th>{head}<th></th><th></th></tr></thead><tbody>{rows}</tbody></table></section>')
     return "".join(out)
@@ -471,7 +511,7 @@ def main():
     # Table + bars page.
     tb_html = TABLEBARS_TEMPLATE
     for k, v in {
-        "__BODY__": build_tablebars(workloads),
+        "__BODY__": build_tablebars(workloads) + build_tablebars(workloads, metric="cpu"),
         "__NLANG__": str(len(langs)),
         "__CAT_LIGHT__": cat_css(PAL_LIGHT),
         "__CAT_DARK__": cat_css(PAL_DARK),
@@ -557,12 +597,14 @@ def main():
         shoot(PNG_DIR / f"{sid}.png", f"file://{ANN_OUT}#png-{sid}", ann_h, ANN_W)
     # Table + bars: full static page, one panel per workload (a 27px row per
     # language + chrome), exported at 1200px wide.
-    tb_h = 340 + sum(len(m["series"]) * 27 + 128 for m in workloads.values())
+    tb_h = 340 + 2 * sum(len(m["series"]) * 27 + 128 for m in workloads.values())
     shoot(PNG_DIR / "tablebars.png", f"file://{TB_OUT}", tb_h, 1200)
-    # ...and one PNG per workload panel (shadow + rounded corners kept).
+    # ...and one PNG per panel (throughput and client-CPU-cost per workload),
+    # shadow + rounded corners kept.
     for w, m in workloads.items():
-        shoot(PNG_DIR / f"tablebars-w{w}.png", f"file://{TB_OUT}#png-w{w}",
-              len(m["series"]) * 27 + 190, 1200)
+        ph = len(m["series"]) * 27 + 190
+        shoot(PNG_DIR / f"tablebars-w{w}.png", f"file://{TB_OUT}#png-w{w}", ph, 1200)
+        shoot(PNG_DIR / f"tablebars-w{w}-cpu.png", f"file://{TB_OUT}#png-w{w}-cpu", ph, 1200)
     # Infographic summary: full static page — header + stats + legend, then one
     # stacked heatmap panel per workload (a 27px row per language + chrome).
     info_h = 420 + sum(len(m["series"]) * 27 + 118 for m in workloads.values())
@@ -1398,7 +1440,7 @@ TABLEBARS_TEMPLATE = r"""<!DOCTYPE html>
 </style>
 <script>
   (function () {
-    const m = location.hash.match(/^#png-(w\d+)$/);
+    const m = location.hash.match(/^#png-(w\d+(?:-cpu)?)$/);
     if (!m) return;
     document.addEventListener("DOMContentLoaded", () => {
       document.body.classList.add("pngmode");
