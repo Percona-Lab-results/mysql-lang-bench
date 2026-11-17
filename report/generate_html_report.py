@@ -340,7 +340,7 @@ def build_tablebars(workloads):
                      f'<td class="trend">{spark(vals, vmax, color)}</td></tr>')
         icon, title, unit = INFO_WL[w]
         out.append(
-            f'<section class="panel"><div class="phead"><span class="icon">{icon}</span>'
+            f'<section class="panel" id="tb-w{w}"><div class="phead"><span class="icon">{icon}</span>'
             f'<div><h2>{m["title"]}</h2><div class="unit">{m["unit"]} &middot; bar length = value on one shared scale '
             f'(full width = {pf(vmax)}) &middot; &#9733; fastest in column &middot; rows ranked by best result</div></div></div>'
             f'<table class="tb"><thead><tr><th></th><th class="langh">Language</th>'
@@ -559,6 +559,10 @@ def main():
     # language + chrome), exported at 1200px wide.
     tb_h = 340 + sum(len(m["series"]) * 27 + 128 for m in workloads.values())
     shoot(PNG_DIR / "tablebars.png", f"file://{TB_OUT}", tb_h, 1200)
+    # ...and one PNG per workload panel (shadow + rounded corners kept).
+    for w, m in workloads.items():
+        shoot(PNG_DIR / f"tablebars-w{w}.png", f"file://{TB_OUT}#png-w{w}",
+              len(m["series"]) * 27 + 190, 1200)
     # Infographic summary: full static page — header + stats + legend, then one
     # stacked heatmap panel per workload (a 27px row per language + chrome).
     info_h = 420 + sum(len(m["series"]) * 27 + 118 for m in workloads.values())
@@ -1386,7 +1390,23 @@ TABLEBARS_TEMPLATE = r"""<!DOCTYPE html>
   td.trend { width: 100px; text-align: center; }
   .spark { display: block; margin: 0 auto; }
   footer { color: var(--muted); font-size: 12px; margin-top: 24px; max-width: 86ch; }
+  /* Single-panel export mode (#png-wN): only that workload's panel, with room
+     around it so its shadow and rounded corners are not clipped. */
+  body.pngmode header, body.pngmode footer, body.pngmode .panel { display: none; }
+  body.pngmode .panel.png-show { display: block; margin-top: 0; }
+  body.pngmode .wrap { padding: 18px 22px 44px; }
 </style>
+<script>
+  (function () {
+    const m = location.hash.match(/^#png-(w\d+)$/);
+    if (!m) return;
+    document.addEventListener("DOMContentLoaded", () => {
+      document.body.classList.add("pngmode");
+      const p = document.getElementById("tb-" + m[1]);
+      if (p) p.classList.add("png-show");
+    });
+  })();
+</script>
 </head>
 <body class="viz-root">
 <div class="wrap">
