@@ -1335,14 +1335,16 @@ TABLEBARS_TEMPLATE = r"""<!DOCTYPE html>
 <title>MySQL client benchmark — table with bars</title>
 <style>
   .viz-root { color-scheme: light;
-    --surface-1: #fcfcfb; --page: #f6f6f3; --text-primary: #0b0b0b;
-    --text-secondary: #52514e; --muted: #898781; --grid: #e7e6df; --track: #efeeea;
-    --border: rgba(11,11,11,0.10); --gold: #e8a800;
-    --card-shadow: inset 0 1px 0 rgba(255,255,255,0.7), 0 1px 2px rgba(17,17,17,0.04), 0 14px 32px -12px rgba(17,17,17,0.16);
+    /* Panels pure white on a slightly darker window; the empty bar tracks are a
+       distinctly darker grey so they stay clearly visible against the white. */
+    --surface-1: #ffffff; --page: #e9e8e4; --text-primary: #0b0b0b;
+    --text-secondary: #52514e; --muted: #898781; --grid: #e7e6df; --track: #dcdbd5;
+    --border: rgba(11,11,11,0.12); --gold: #e8a800;
+    --card-shadow: 0 1px 2px rgba(17,17,17,0.05), 0 14px 32px -12px rgba(17,17,17,0.20);
     __CAT_LIGHT__ }
   @media (prefers-color-scheme: dark) { .viz-root {
     color-scheme: dark; --surface-1: #1a1a19; --page: #0d0d0d; --text-primary: #f0efec;
-    --text-secondary: #c3c2b7; --muted: #898781; --grid: #2c2c2a; --track: #242423;
+    --text-secondary: #c3c2b7; --muted: #898781; --grid: #2c2c2a; --track: #2a2a28;
     --border: rgba(255,255,255,0.10); --gold: #f2c23a;
     --card-shadow: inset 0 1px 0 rgba(255,255,255,0.06), 0 1px 2px rgba(0,0,0,0.5), 0 16px 34px -12px rgba(0,0,0,0.7);
     __CAT_DARK__ } }
