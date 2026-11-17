@@ -505,10 +505,12 @@ def main():
         return
     PNG_DIR.mkdir(exist_ok=True)
 
-    def shoot(png, url, h, w=PNG_W):
+    def shoot(png, url, h, w=PNG_W, transparent=False):
         cmd = [chromium, "--headless", "--disable-gpu", "--no-sandbox",
                "--hide-scrollbars", f"--force-device-scale-factor={PNG_SCALE}",
                f"--screenshot={png}", f"--window-size={w},{h}", url]
+        if transparent:   # keep a transparent page background in the PNG
+            cmd.insert(1, "--default-background-color=00000000")
         try:
             r = subprocess.run(cmd, capture_output=True, text=True, timeout=120)
         except subprocess.TimeoutExpired:
@@ -555,8 +557,8 @@ def main():
         shoot(PNG_DIR / f"{sid}.png", f"file://{ANN_OUT}#png-{sid}", ann_h, ANN_W)
     # Table + bars: full static page, one panel per workload (a 27px row per
     # language + chrome), exported at 1200px wide.
-    tb_h = 340 + sum(len(m["series"]) * 27 + 110 for m in workloads.values())
-    shoot(PNG_DIR / "tablebars.png", f"file://{TB_OUT}", tb_h, 1200)
+    tb_h = 340 + sum(len(m["series"]) * 27 + 128 for m in workloads.values())
+    shoot(PNG_DIR / "tablebars.png", f"file://{TB_OUT}", tb_h, 1200, transparent=True)
     # Infographic summary: full static page — header + stats + legend, then one
     # stacked heatmap panel per workload (a 27px row per language + chrome).
     info_h = 420 + sum(len(m["series"]) * 27 + 118 for m in workloads.values())
@@ -1335,10 +1337,10 @@ TABLEBARS_TEMPLATE = r"""<!DOCTYPE html>
 <title>MySQL client benchmark — table with bars</title>
 <style>
   .viz-root { color-scheme: light;
-    /* White page/image background with light-grey (#E9E8E4) graph panels; the
-       empty bar tracks are a darker grey so they stay clearly visible on the panels. */
-    --surface-1: #e9e8e4; --page: #ffffff; --text-primary: #0b0b0b;
-    --text-secondary: #52514e; --muted: #898781; --grid: #dddcd6; --track: #d2d1ca;
+    /* White graph panels on a transparent page (the PNG keeps the transparency);
+       the empty bar tracks are a darker grey so they stay visible on white. */
+    --surface-1: #ffffff; --page: transparent; --text-primary: #0b0b0b;
+    --text-secondary: #52514e; --muted: #898781; --grid: #e7e6df; --track: #dcdbd5;
     --border: rgba(11,11,11,0.12); --gold: #e8a800;
     --card-shadow: 0 1px 2px rgba(17,17,17,0.05), 0 14px 32px -12px rgba(17,17,17,0.20);
     __CAT_LIGHT__ }
@@ -1358,7 +1360,7 @@ TABLEBARS_TEMPLATE = r"""<!DOCTYPE html>
   .navlink { color: var(--cat-1); text-decoration: none; font-weight: 600; font-size: 14px; align-self: center; }
   .navlink:hover { text-decoration: underline; }
   .panel { background: var(--surface-1); border: 1px solid var(--border); border-radius: 16px;
-    padding: 16px 18px 14px; box-shadow: var(--card-shadow); margin-top: 18px; }
+    padding: 16px 18px 14px; box-shadow: var(--card-shadow); margin-top: 36px; }
   .phead { display: flex; align-items: center; gap: 12px; margin-bottom: 10px; }
   .icon { font-size: 25px; line-height: 1; }
   .panel h2 { font-size: 16.5px; margin: 0; font-weight: 650; letter-spacing: -0.01em; }
