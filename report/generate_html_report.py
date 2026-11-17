@@ -1335,10 +1335,10 @@ TABLEBARS_TEMPLATE = r"""<!DOCTYPE html>
 <title>MySQL client benchmark — table with bars</title>
 <style>
   .viz-root { color-scheme: light;
-    /* Panels pure white on a slightly darker window; the empty bar tracks are a
-       distinctly darker grey so they stay clearly visible against the white. */
-    --surface-1: #ffffff; --page: #e9e8e4; --text-primary: #0b0b0b;
-    --text-secondary: #52514e; --muted: #898781; --grid: #e7e6df; --track: #dcdbd5;
+    /* White page/image background with light-grey (#E9E8E4) graph panels; the
+       empty bar tracks are a darker grey so they stay clearly visible on the panels. */
+    --surface-1: #e9e8e4; --page: #ffffff; --text-primary: #0b0b0b;
+    --text-secondary: #52514e; --muted: #898781; --grid: #dddcd6; --track: #d2d1ca;
     --border: rgba(11,11,11,0.12); --gold: #e8a800;
     --card-shadow: 0 1px 2px rgba(17,17,17,0.05), 0 14px 32px -12px rgba(17,17,17,0.20);
     __CAT_LIGHT__ }
