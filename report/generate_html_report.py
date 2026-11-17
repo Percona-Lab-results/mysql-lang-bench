@@ -558,7 +558,7 @@ def main():
     # Table + bars: full static page, one panel per workload (a 27px row per
     # language + chrome), exported at 1200px wide.
     tb_h = 340 + sum(len(m["series"]) * 27 + 128 for m in workloads.values())
-    shoot(PNG_DIR / "tablebars.png", f"file://{TB_OUT}", tb_h, 1200, transparent=True)
+    shoot(PNG_DIR / "tablebars.png", f"file://{TB_OUT}", tb_h, 1200)
     # Infographic summary: full static page — header + stats + legend, then one
     # stacked heatmap panel per workload (a 27px row per language + chrome).
     info_h = 420 + sum(len(m["series"]) * 27 + 118 for m in workloads.values())
@@ -1337,12 +1337,12 @@ TABLEBARS_TEMPLATE = r"""<!DOCTYPE html>
 <title>MySQL client benchmark — table with bars</title>
 <style>
   .viz-root { color-scheme: light;
-    /* White graph panels on a transparent page (the PNG keeps the transparency);
-       the empty bar tracks are a darker grey so they stay visible on white. */
-    --surface-1: #ffffff; --page: transparent; --text-primary: #0b0b0b;
+    /* White graph panels on a white page, lifted by a stronger shadow; the empty
+       bar tracks are a darker grey so they stay visible on white. */
+    --surface-1: #ffffff; --page: #ffffff; --text-primary: #0b0b0b;
     --text-secondary: #52514e; --muted: #898781; --grid: #e7e6df; --track: #dcdbd5;
     --border: rgba(11,11,11,0.12); --gold: #e8a800;
-    --card-shadow: 0 1px 2px rgba(17,17,17,0.05), 0 14px 32px -12px rgba(17,17,17,0.20);
+    --card-shadow: 0 1px 2px rgba(17,17,17,0.065), 0 14px 32px -12px rgba(17,17,17,0.26);
     __CAT_LIGHT__ }
   @media (prefers-color-scheme: dark) { .viz-root {
     color-scheme: dark; --surface-1: #1a1a19; --page: #0d0d0d; --text-primary: #f0efec;
