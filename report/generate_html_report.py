@@ -380,13 +380,29 @@ def build_tablebars(workloads, metric="thr"):
                    f'(full width = {pf(vmax)}) &middot; &#9733; fastest in column &middot; rows ranked by best result')
             bestcol = "best"
             pid = f"tb-w{w}"
+        # Plain data table (all worker counts, exact values), collapsed by default.
+        all_t = m["threads"]
+        dhead = "".join(f'<th class="num">{t}</th>' for t in all_t)
+        drows = ""
+        for s, _, _ in rows_data:
+            src = s.get("cpu") if cpu else s["thr"]
+            cells = "".join(
+                (f'<td class="num">{v:,.2f}</td>' if cpu else f'<td class="num">{v:,.0f}</td>')
+                if v is not None else '<td class="num">–</td>' for v in src)
+            drows += f'<tr><th scope="row">{s["name"]}</th>{cells}</tr>'
+        dunit = f'µs client CPU per {"row" if w in (1, 2) else "blob"}' if cpu else m["unit"]
+        data_tbl = (f'<details class="tables" id="tbl-{pid}" data-workload="{w}" data-cpu="{1 if cpu else 0}">'
+                    f'<summary>Table view &mdash; {dunit}, all worker counts</summary><div class="tablewrap">'
+                    f'<table class="data"><thead><tr><th>Language</th>{dhead}</tr></thead>'
+                    f'<tbody>{drows}</tbody></table></div></details>')
         out.append(
             f'<section class="panel" id="{pid}"><div class="phead"><span class="icon">{icon}</span>'
             f'<div><h2>{h2}</h2><div class="unit">{sub}</div></div></div>'
             f'<table class="tb"><thead><tr><th></th><th class="langh">Language</th>'
             f'<th class="grp" colspan="{len(threads)}">concurrent workers</th><th class="peakh">{bestcol}</th>'
             f'<th class="trendh">trend {threads[0]}&rarr;{threads[-1]}</th></tr>'
-            f'<tr><th></th><th></th>{head}<th></th><th></th></tr></thead><tbody>{rows}</tbody></table></section>')
+            f'<tr><th></th><th></th>{head}<th></th><th></th></tr></thead><tbody>{rows}</tbody></table>'
+            f'{data_tbl}</section>')
     return "".join(out)
 
 
@@ -1432,20 +1448,54 @@ TABLEBARS_TEMPLATE = r"""<!DOCTYPE html>
   td.trend { width: 100px; text-align: center; }
   .spark { display: block; margin: 0 auto; }
   footer { color: var(--muted); font-size: 12px; margin-top: 24px; max-width: 86ch; }
-  /* Single-panel export mode (#png-wN): only that workload's panel, with room
+  /* Collapsible plain data tables under each panel. */
+  details.tables { margin-top: 14px; }
+  details.tables summary { cursor: pointer; color: var(--text-secondary); font-size: 13px; }
+  .tablewrap { overflow-x: auto; margin-top: 10px; }
+  table.data { border-collapse: collapse; background: var(--surface-1); border: 1px solid var(--border);
+    border-radius: 10px; font-size: 13px; min-width: 640px; }
+  table.data th, table.data td { padding: 6px 12px; text-align: left; border-bottom: 1px solid var(--grid); }
+  table.data thead th { color: var(--text-secondary); font-weight: 600; }
+  table.data tbody tr:last-child th, table.data tbody tr:last-child td { border-bottom: none; }
+  table.data td.num, table.data th.num { text-align: right; font-variant-numeric: tabular-nums; }
+  /* Single-panel export mode (#png-wN / #png-wN-cpu): only that panel, with room
      around it so its shadow and rounded corners are not clipped. */
-  body.pngmode header, body.pngmode footer, body.pngmode .panel { display: none; }
+  body.pngmode header, body.pngmode footer, body.pngmode .panel, body.pngmode details.tables { display: none; }
   body.pngmode .panel.png-show { display: block; margin-top: 0; }
   body.pngmode .wrap { padding: 18px 22px 44px; }
 </style>
 <script>
   (function () {
     const m = location.hash.match(/^#png-(w\d+(?:-cpu)?)$/);
-    if (!m) return;
     document.addEventListener("DOMContentLoaded", () => {
-      document.body.classList.add("pngmode");
-      const p = document.getElementById("tb-" + m[1]);
-      if (p) p.classList.add("png-show");
+      if (m) {
+        document.body.classList.add("pngmode");
+        const p = document.getElementById("tb-" + m[1]);
+        if (p) p.classList.add("png-show");
+        return;
+      }
+      // Deep-linking: ?workload=N scrolls to that workload's throughput panel;
+      // &cpu=1 targets its client-CPU panel instead; &table=1 also opens that
+      // panel's data table and scrolls to it. Toggling a table updates the URL.
+      const q = new URLSearchParams(location.search);
+      const wl = parseInt(q.get("workload") || "", 10);
+      const cpuOn = q.get("cpu") === "1", tableOn = q.get("table") === "1";
+      if (wl >= 1) {
+        const pid = "tb-w" + wl + (cpuOn ? "-cpu" : "");
+        const tbl = document.getElementById("tbl-" + pid), panel = document.getElementById(pid);
+        let target = panel;
+        if (tableOn && tbl) { tbl.open = true; target = tbl; }
+        if (target) requestAnimationFrame(() => target.scrollIntoView({ block: "start" }));
+      }
+      for (const d of document.querySelectorAll("details.tables")) {
+        d.addEventListener("toggle", () => {
+          const u = new URLSearchParams(location.search);
+          u.set("workload", d.getAttribute("data-workload"));
+          if (d.getAttribute("data-cpu") === "1") u.set("cpu", "1"); else u.delete("cpu");
+          u.set("table", d.open ? "1" : "0");
+          history.replaceState(null, "", location.pathname + "?" + u.toString() + location.hash);
+        });
+      }
     });
   })();
 </script>
