@@ -295,8 +295,22 @@ def build_post_lowcpu():
            height=int(h * 760 / 720) + 90)
 
 
+def build_post_native():
+    """Native languages on blob reads: libmysqlclient (C, Swift) vs own-language drivers (Rust, Go)."""
+    series = [
+        ("c", "C (native reference)", REF),
+        ("swift", "Swift", S1),
+        ("rust", "Rust", S2),
+        ("go", "Go", S3),
+    ]
+    svg = line_chart_svg(4, series, ymax=9e3, ytick=1e3, tick_fmt=lambda t: f"{t:,.0f}",
+                         end_fmt=lambda v: f"{v:,.0f}", ylabel="Blobs per second", left=62)
+    render("post-native-w4", page("Blob reads: 1 MiB blobs read and hashed per second", svg, series))
+
+
 if __name__ == "__main__":
     build_post1()
     build_post2()
     build_post_managed()
     build_post_lowcpu()
+    build_post_native()
