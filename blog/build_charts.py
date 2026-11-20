@@ -18,7 +18,7 @@ BUILD = BLOG / "build"
 PNG = BLOG / "png"
 DATA = json.loads((ROOT / "runs" / "avg.json").read_text())
 
-THREADS = [8, 32, 128, 512]
+THREADS = [4, 8, 16, 32, 64, 128, 256, 512]
 
 # Light-mode palette (validated reference categorical slots 1-5, gray for C).
 INK, INK2, MUTED = "#0b0b0b", "#52514e", "#75746f"
