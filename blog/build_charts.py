@@ -134,10 +134,11 @@ def line_chart_svg(workload, series, ymax, ytick, tick_fmt, end_fmt, ylabel, lef
     return "\n".join(out)
 
 
-def bar_chart_svg(rows, xmax, xtick, xlabel, value_fmt, colour=S1):
-    """Horizontal bars, one per (label, value) row, in the order given."""
-    bar_h, gap = 18, 8
-    L, R, T, B = 96, 64, 8, 44
+def bar_chart_svg(rows, xmax, xtick, xlabel, value_fmt, colour=S1, left=96, bar_h=18, ref=None):
+    """Horizontal bars, one per (label, value) row, in the order given.
+    ref: optional x value drawn as a labelled dashed reference line."""
+    gap = 8
+    L, R, T, B = left, 64, 8, 44
     W = 720
     ph = len(rows) * (bar_h + gap) - gap
     H = T + ph + B
@@ -162,6 +163,9 @@ def bar_chart_svg(rows, xmax, xtick, xlabel, value_fmt, colour=S1):
                    f'a{r},{r} 0 0 1 {-r},{r} h{-(w - r):.1f} z" fill="{colour}"/>')
         out.append(f'<text x="{L - 10}" y="{by + bar_h / 2 + 4:.1f}" text-anchor="end" font-size="12" fill="{INK2}">{label}</text>')
         out.append(f'<text x="{L + w + 6:.1f}" y="{by + bar_h / 2 + 4:.1f}" font-size="12" fill="{INK2}">{value_fmt(v)}</text>')
+    if ref is not None:
+        rx = x(ref)
+        out.append(f'<line x1="{rx:.1f}" x2="{rx:.1f}" y1="{T - 4}" y2="{T + ph}" stroke="{REF}" stroke-width="1.5" stroke-dasharray="4 3"/>')
     out.append(f'<line x1="{L}" x2="{L}" y1="{T}" y2="{T + ph}" stroke="{AXIS}" stroke-width="1"/>')
     out.append(f'<line x1="{L}" x2="{L + pw}" y1="{T + ph}" y2="{T + ph}" stroke="{AXIS}" stroke-width="1"/>')
     out.append(f'<text x="{L + pw / 2:.1f}" y="{H - 6}" text-anchor="middle" font-size="12" fill="{INK2}">{xlabel}</text>')
@@ -308,9 +312,66 @@ def build_post_native():
     render("post-native-w4", page("Blob reads: 1 MiB blobs read and hashed per second", svg, series))
 
 
+def build_post_python():
+    """Python's throughput as a share of C's, per workload, at 512 workers."""
+    labels = {1: "Integer inserts", 2: "Integer reads", 3: "Blob inserts", 4: "Blob reads"}
+    rows = [(labels[w], 100 * run(w, "python", 512)["throughput"] / run(w, "c", 512)["throughput"])
+            for w in (1, 2, 3, 4)]
+    svg, h = bar_chart_svg(rows, xmax=120, xtick=20, xlabel="Python throughput as a share of C's (%), 512 workers",
+                           value_fmt=lambda v: f"{v:.0f}%", colour=S4, left=120, bar_h=24, ref=100)
+    render("post-python-share", page("Python compared with C, by workload", svg), height=int(h * 760 / 720) + 70)
+
+
+def slope_chart_svg(left_order, right_order, highlight, left_title, right_title, left_val, right_val):
+    """Rank change between two orderings. highlight: {lang: colour}; others are gray."""
+    W, T, row = 720, 34, 24
+    n = len(left_order)
+    H = T + n * row + 10
+    xl, xr = 250, 470
+    y = lambda i: T + i * row + row / 2
+    out = [svg_open(W, H)]
+    out.append(f'<text x="{xl}" y="16" text-anchor="end" font-size="13" font-weight="600" fill="{INK}">{left_title}</text>')
+    out.append(f'<text x="{xr}" y="16" font-size="13" font-weight="600" fill="{INK}">{right_title}</text>')
+    langs = list(left_order)
+    langs.sort(key=lambda l: l in highlight)  # draw highlighted lines last, on top
+    for lang in langs:
+        i, j = left_order.index(lang), right_order.index(lang)
+        colour = highlight.get(lang, "#c9c8c3")
+        width = 2.5 if lang in highlight else 1.5
+        out.append(f'<line x1="{xl + 8}" y1="{y(i):.1f}" x2="{xr - 8}" y2="{y(j):.1f}" stroke="{colour}" stroke-width="{width}" stroke-linecap="round"/>')
+        for cx, cy in ((xl + 8, y(i)), (xr - 8, y(j))):
+            out.append(f'<circle cx="{cx}" cy="{cy:.1f}" r="4" fill="{colour}" stroke="{BG}" stroke-width="2"/>')
+    for lang in left_order:
+        i, j = left_order.index(lang), right_order.index(lang)
+        ink = INK if lang in highlight else INK2
+        weight = "600" if lang in highlight else "400"
+        out.append(f'<text x="{xl - 6}" y="{y(i) + 4:.1f}" text-anchor="end" font-size="12" fill="{ink}" font-weight="{weight}">'
+                   f'{i + 1}. {NAMES[lang]} <tspan fill="{MUTED}" font-weight="400">{left_val(lang)}</tspan></text>')
+        out.append(f'<text x="{xr + 6}" y="{y(j) + 4:.1f}" font-size="12" fill="{ink}" font-weight="{weight}">'
+                   f'{j + 1}. {NAMES[lang]} <tspan fill="{MUTED}" font-weight="400">{right_val(lang)}</tspan></text>')
+    out.append("</svg>")
+    return "\n".join(out), H
+
+
+def build_post_blobranks():
+    langs = list(NAMES)
+    def share(w, l):
+        pct = 100 * run(w, l, 512)["throughput"] / run(w, "c", 512)["throughput"]
+        return "<1%" if pct < 1 else f"{pct:.0f}%"
+    left = sorted(langs, key=lambda l: -run(2, l, 512)["throughput"])
+    right = sorted(langs, key=lambda l: -run(4, l, 512)["throughput"])
+    highlight = {"csharp": "#6250d6", "python": S4, "php": S1}
+    svg, h = slope_chart_svg(left, right, highlight, "Integer reads", "Blob reads",
+                             lambda l: share(2, l), lambda l: share(4, l))
+    render("post-blobranks", page("Rank at 512 workers, with each language's speed as a share of C's", svg),
+           height=int(h * 760 / 720) + 70)
+
+
 if __name__ == "__main__":
     build_post1()
     build_post2()
     build_post_managed()
     build_post_lowcpu()
     build_post_native()
+    build_post_python()
+    build_post_blobranks()
