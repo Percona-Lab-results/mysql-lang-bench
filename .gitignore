@@ -18,3 +18,4 @@ impl/go/bench
 __pycache__/
 *.o
 *.pyc
+blog/build/
