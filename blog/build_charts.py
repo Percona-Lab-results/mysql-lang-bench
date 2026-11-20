@@ -14,7 +14,7 @@ ROOT = pathlib.Path(__file__).resolve().parent.parent
 BLOG = ROOT / "blog"
 DATA = json.loads((ROOT / "runs" / "avg.json").read_text())
 
-THREADS = [4, 8, 16, 32, 64, 128, 256, 512]
+THREADS = [8, 32, 128, 512]
 # (lang key, label, CSS colour var). C is a neutral reference line.
 SERIES = [
     ("c", "C (native reference)", "--ref"),
