@@ -221,6 +221,22 @@ def build_post2():
     render("post-2-w1-cpu", page("Client CPU cost of inserting rows, 512 workers", svg), height=int(h * 760 / 720) + 70)
 
 
+def build_post_managed():
+    """Java and C# against C: integer reads and blob reads."""
+    series = [
+        ("c", "C (native reference)", REF),
+        ("java", "Java", S2),
+        ("csharp", "C#", "#6250d6"),  # reference palette slot 7 (violet)
+    ]
+    svg = line_chart_svg(2, series, ymax=30e6, ytick=5e6, tick_fmt=fmt_tick_m,
+                         end_fmt=fmt_m, ylabel="Rows per second")
+    render("post-managed-w2", page("Integer reads: rows read and summed per second", svg, series))
+    svg = line_chart_svg(4, series, ymax=9e3, ytick=1e3, tick_fmt=lambda t: f"{t:,.0f}",
+                         end_fmt=lambda v: f"{v:,.0f}", ylabel="Blobs per second", left=62)
+    render("post-managed-w4", page("Blob reads: 1 MiB blobs read and hashed per second", svg, series))
+
+
 if __name__ == "__main__":
     build_post1()
     build_post2()
+    build_post_managed()
