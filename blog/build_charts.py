@@ -36,6 +36,7 @@ POST1_SERIES = [
     ("lua", "Lua", S2),
     ("php", "PHP", S1),
     ("javascript", "JavaScript", S3),
+    ("typescript", "TypeScript", "#6250d6"),  # reference palette slot 7 (violet)
     ("python", "Python", S4),
     ("ruby", "Ruby", S5),
 ]
@@ -209,7 +210,7 @@ def render(name, html, height=500):
 
 def build_post1():
     svg = line_chart_svg(2, POST1_SERIES, ymax=30e6, ytick=5e6, tick_fmt=fmt_tick_m,
-                         end_fmt=fmt_m, ylabel="Rows per second")
+                         end_fmt=fmt_m, ylabel="Rows per second", label_dots=True)
     render("post-1-w2", page("Rows read and summed per second, by number of workers", svg, POST1_SERIES))
 
 
