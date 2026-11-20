@@ -236,7 +236,67 @@ def build_post_managed():
     render("post-managed-w4", page("Blob reads: 1 MiB blobs read and hashed per second", svg, series))
 
 
+def stacked_cores_svg(rows, unit, xmax=80):
+    """rows: (label, client_cores, server_cores, throughput). Two stacked segments per bar,
+    a 2px surface gap between them, throughput written at the bar end."""
+    bar_h, gap = 22, 10
+    L, R, T, B = 96, 150, 8, 44
+    W = 720
+    ph = len(rows) * (bar_h + gap) - gap
+    H = T + ph + B
+    pw = W - L - R
+    x = lambda v: L + pw * v / xmax
+    out = [svg_open(W, H)]
+    for t in range(0, xmax + 1, 10):
+        tx = x(t)
+        if t:
+            out.append(f'<line x1="{tx:.1f}" x2="{tx:.1f}" y1="{T}" y2="{T + ph}" stroke="{GRID}" stroke-width="1"/>')
+        out.append(f'<line x1="{tx:.1f}" x2="{tx:.1f}" y1="{T + ph}" y2="{T + ph + 5}" stroke="{AXIS}" stroke-width="1"/>')
+        out.append(f'<text x="{tx:.1f}" y="{T + ph + 20}" text-anchor="middle" font-size="12" fill="{MUTED}">{t}</text>')
+    for i, (label, cli, srv, thr) in enumerate(rows):
+        by = T + i * (bar_h + gap)
+        cw = max(x(cli) - L, 1)
+        sw = max(x(cli + srv) - x(cli) - 2, 1)
+        out.append(f'<rect x="{L}" y="{by}" width="{cw:.1f}" height="{bar_h}" fill="{S1}"/>')
+        sx = L + cw + 2
+        r = min(4, sw / 2)
+        out.append(f'<path d="M{sx:.1f},{by} h{sw - r:.1f} a{r},{r} 0 0 1 {r},{r} v{bar_h - 2 * r} '
+                   f'a{r},{r} 0 0 1 {-r},{r} h{-(sw - r):.1f} z" fill="{S2}"/>')
+        out.append(f'<text x="{L - 10}" y="{by + bar_h / 2 + 4:.1f}" text-anchor="end" font-size="12" fill="{INK2}">{label}</text>')
+        out.append(f'<text x="{sx + sw + 8:.1f}" y="{by + bar_h / 2 + 4:.1f}" font-size="12" fill="{INK2}">'
+                   f'{cli + srv:.0f} cores <tspan fill="{MUTED}">· {thr} {unit}</tspan></text>')
+    out.append(f'<line x1="{L}" x2="{L}" y1="{T}" y2="{T + ph}" stroke="{AXIS}" stroke-width="1"/>')
+    out.append(f'<line x1="{L}" x2="{L + pw}" y1="{T + ph}" y2="{T + ph}" stroke="{AXIS}" stroke-width="1"/>')
+    out.append(f'<text x="{L + pw / 2:.1f}" y="{H - 6}" text-anchor="middle" font-size="12" fill="{INK2}">'
+               f'Cores busy on the 80-CPU machine (average over the whole run)</text>')
+    out.append("</svg>")
+    return "\n".join(out), H
+
+
+def cores_rows(workload, threads, langs, fmt):
+    rows = []
+    for lang in langs:
+        r = run(workload, lang, threads)
+        wall = r["run_wall_s"]
+        rows.append((NAMES[lang], r["client_cpu_s"] / wall, r["server_cpu_s"] / wall, r["throughput"]))
+    rows.sort(key=lambda row: -row[3])
+    return [(a, b, c, fmt(d)) for a, b, c, d in rows]
+
+
+def build_post_lowcpu():
+    legend = [(None, "Client (benchmark process)", S1), (None, "Database server (mysqld)", S2)]
+    rows = cores_rows(2, 512, ["c", "lua", "php", "python", "ruby"], fmt_m)
+    svg, h = stacked_cores_svg(rows, "rows/s")
+    render("post-lowcpu-w2", page("Integer reads at 512 workers: where the CPU goes", svg, legend),
+           height=int(h * 760 / 720) + 90)
+    rows = cores_rows(3, 512, ["c", "php", "lua", "go", "csharp", "java", "python"], lambda v: f"{v:.0f}")
+    svg, h = stacked_cores_svg(rows, "blobs/s")
+    render("post-lowcpu-w3", page("Blob inserts at 512 workers: where the CPU goes", svg, legend),
+           height=int(h * 760 / 720) + 90)
+
+
 if __name__ == "__main__":
     build_post1()
     build_post2()
     build_post_managed()
+    build_post_lowcpu()
