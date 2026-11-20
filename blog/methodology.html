@@ -1,0 +1,230 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Benchmark Methodology</title>
+<meta name="description" content="Methodology and test environment for the series How Popular Programming Languages Perform with MySQL.">
+<style>
+  :root {
+    color-scheme: light;
+    --bg: #fcfcfb; --surface: #f3f2ef; --ink: #0b0b0b; --ink-2: #52514e; --muted: #75746f;
+    --rule: #e2e1dc; --accent: #2a78d6; --code-bg: #f3f2ef;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root:not([data-theme="light"]) {
+      color-scheme: dark;
+      --bg: #1a1a19; --surface: #242422; --ink: #f0efec; --ink-2: #c3c2b7; --muted: #9a998f;
+      --rule: #353532; --accent: #3987e5; --code-bg: #242422;
+    }
+  }
+  :root[data-theme="dark"] {
+    color-scheme: dark;
+    --bg: #1a1a19; --surface: #242422; --ink: #f0efec; --ink-2: #c3c2b7; --muted: #9a998f;
+    --rule: #353532; --accent: #3987e5; --code-bg: #242422;
+  }
+  * { box-sizing: border-box; }
+  body { margin: 0; background: var(--bg); color: var(--ink);
+         font: 17px/1.65 system-ui, -apple-system, "Segoe UI", Roboto, sans-serif; }
+  article { max-width: 760px; margin: 0 auto; padding: 40px 16px 64px; }
+  h1 { font-size: 2rem; line-height: 1.2; margin: 0 0 8px; }
+  h2 { font-size: 1.35rem; margin: 2.2em 0 .5em; }
+  h3 { font-size: 1.05rem; margin: 1.6em 0 .4em; }
+  p, li { color: var(--ink); }
+  .kicker { color: var(--muted); font-size: .9rem; margin: 0 0 4px; text-transform: uppercase; letter-spacing: .06em; }
+  .lede { color: var(--ink-2); font-size: 1.1rem; }
+  a { color: var(--accent); }
+  .table-wrap { overflow-x: auto; margin: 1em 0; }
+  table { border-collapse: collapse; width: 100%; font-size: .9rem; }
+  th, td { text-align: left; padding: 7px 10px; border-bottom: 1px solid var(--rule); vertical-align: top; }
+  th { color: var(--ink-2); font-weight: 600; }
+  td.group { background: var(--surface); font-weight: 600; color: var(--ink-2); }
+  code { background: var(--code-bg); padding: 1px 5px; border-radius: 4px; font-size: .88em; }
+  pre { background: var(--code-bg); padding: 14px 16px; border-radius: 8px; overflow-x: auto; font-size: .82rem; line-height: 1.5; }
+  pre code { background: none; padding: 0; }
+  details { border: 1px solid var(--rule); border-radius: 8px; padding: 10px 14px; margin: 1em 0; }
+  summary { cursor: pointer; font-weight: 600; }
+  .note { background: var(--surface); border-radius: 8px; padding: 12px 16px; color: var(--ink-2); }
+  nav.series { border-top: 1px solid var(--rule); margin-top: 3em; padding-top: 1em; font-size: .95rem; }
+  nav.series ol { padding-left: 1.2em; }
+</style>
+</head>
+<body>
+<article>
+
+<p class="kicker">How popular programming languages perform with MySQL</p>
+<h1>Methodology and test environment</h1>
+<p class="lede">Every post in this series uses the same test setup. This page describes it once,
+so the posts can focus on results. It covers what we measured, how we kept the comparison fair,
+the hardware and server configuration, and the limits of the test.</p>
+
+<h2 id="question">The question</h2>
+<p>We did not run compute benchmarks such as tight loops or simulations. Most application code
+spends its time talking to a database, so we asked a more practical question: how much does a
+language and its MySQL driver cost under real concurrency? In practice you never benchmark a
+language on its own. You benchmark a language together with the driver its ecosystem actually uses.</p>
+
+<h2 id="languages">Languages and drivers</h2>
+<p>Thirteen languages took part. Each one uses its most common MySQL driver with default
+settings. The concurrency column matters for several results in the series. It shows how each
+implementation runs its workers.</p>
+
+<div class="table-wrap">
+<table>
+  <thead>
+    <tr><th>Language</th><th>Runtime / compiler</th><th>MySQL driver</th><th>Driver version</th><th>Workers run as</th><th>Server-side prepared statements</th></tr>
+  </thead>
+  <tbody>
+    <tr><td class="group" colspan="6">Native code</td></tr>
+    <tr><td>C</td><td>gcc 13.3.0</td><td>libmysqlclient</td><td>8.0.46</td><td>pthreads</td><td>Yes</td></tr>
+    <tr><td>C++</td><td>g++ 13.3.0</td><td>libmysqlclient</td><td>8.0.46</td><td>std::thread</td><td>Yes</td></tr>
+    <tr><td>Rust</td><td>rustc 1.99.1</td><td>mysql crate</td><td>25.0.1</td><td>std::thread</td><td>Yes</td></tr>
+    <tr><td>Go</td><td>go 1.22.2</td><td>go-sql-driver/mysql</td><td>1.9.3</td><td>goroutines, one dedicated connection each</td><td>Yes</td></tr>
+    <tr><td>Swift</td><td>swift 6.2</td><td>libmysqlclient</td><td>8.0.46</td><td>threads</td><td>Yes</td></tr>
+    <tr><td class="group" colspan="6">Managed runtime</td></tr>
+    <tr><td>Java</td><td>OpenJDK 21.0.13</td><td>Connector/J</td><td>8.4.0</td><td>threads</td><td>Yes</td></tr>
+    <tr><td>C#</td><td>.NET 8.0.34</td><td>MySqlConnector</td><td>2.4.0</td><td>threads</td><td>Yes</td></tr>
+    <tr><td class="group" colspan="6">Interpreted and just-in-time compiled</td></tr>
+    <tr><td>PHP</td><td>PHP 8.3.6</td><td>mysqli (mysqlnd)</td><td>8.3.6</td><td>forked processes</td><td>Yes</td></tr>
+    <tr><td>Lua</td><td>LuaJIT 2.1</td><td>libmysqlclient via LuaJIT FFI</td><td>8.4.9</td><td>forked processes</td><td>No</td></tr>
+    <tr><td>Python</td><td>CPython 3.12.3</td><td>mysqlclient</td><td>2.3.0 (libmysqlclient 8.4.9)</td><td>threads (shared GIL)</td><td>No</td></tr>
+    <tr><td>Ruby</td><td>Ruby 3.2.3</td><td>mysql2</td><td>0.5.7</td><td>threads (shared GVL)</td><td>Yes</td></tr>
+    <tr><td>JavaScript</td><td>Node.js 18.19.1</td><td>mysql2</td><td>3.24.6</td><td>worker_threads</td><td>Yes</td></tr>
+    <tr><td>TypeScript</td><td>Node.js 18.19.1, tsc 5.9.3</td><td>mysql2</td><td>3.24.6</td><td>worker_threads</td><td>Yes</td></tr>
+  </tbody>
+</table>
+</div>
+<p>Python's mysqlclient driver does not support server-side prepared statements. It formats
+query parameters on the client instead. The Lua implementation calls the libmysqlclient text
+protocol directly. We kept both choices because they reflect how these languages are commonly used.
+Each affected post points out where this matters.</p>
+
+<h2 id="workloads">The four workloads</h2>
+<p>All languages run the same four workloads. Every worker opens its own connection and does a
+fixed amount of work, so total work grows with the number of workers.</p>
+<div class="table-wrap">
+<table>
+  <thead><tr><th>Workload</th><th>What each worker does</th><th>Reported as</th></tr></thead>
+  <tbody>
+    <tr><td>1. Integer insert</td><td>Inserts 100,000 random integers with a prepared 10-row multi-row <code>INSERT</code>, executed 10,000 times. Autocommit is on, so each statement commits on its own.</td><td>rows/s</td></tr>
+    <tr><td>2. Integer fetch and sum</td><td>Runs one prepared <code>SELECT val FROM bench_int LIMIT 100000</code>, fetches every row and sums the values in application code with a 64-bit accumulator.</td><td>rows/s</td></tr>
+    <tr><td>3. Blob insert and MD5</td><td>Generates 20 pseudo-random 1 MiB blobs, computes each blob's MD5 in application code and inserts each blob with its own commit.</td><td>blobs/s</td></tr>
+    <tr><td>4. Blob read and MD5</td><td>Reads back its own 20 blobs by primary key with a prepared <code>SELECT</code> and computes each blob's MD5 in application code.</td><td>blobs/s</td></tr>
+  </tbody>
+</table>
+</div>
+<p>The tables are deliberately minimal. <code>bench_int</code> has a single <code>INT</code> column
+and no index. <code>bench_blob</code> has a <code>BIGINT</code> primary key and a
+<code>LONGBLOB</code> column.</p>
+
+<h2 id="execution">How a test run works</h2>
+<ul>
+  <li><strong>Concurrency sweep.</strong> Each workload runs at 4, 8, 16, 32, 64, 128, 256 and 512 concurrent workers.</li>
+  <li><strong>Fixed work, not fixed time.</strong> Every language does identical work, and elapsed time is the result.</li>
+  <li><strong>Ordering.</strong> At each worker count, a write workload runs first and its read workload follows. The insert tables are truncated before each write workload. The data is already in the buffer pool when it is read, and there is no separate warm-up phase.</li>
+  <li><strong>Timing.</strong> Workers connect and prepare their statements first, then wait at a start barrier. The clock starts when the barrier is released and stops when the last worker finishes. Connection setup is outside the timed window.</li>
+  <li><strong>Same random data.</strong> Every implementation uses the same 31-bit linear congruential generator, seeded per worker, and must reproduce a reference sequence before its results count.</li>
+  <li><strong>No connection pooling.</strong> Each worker owns one connection for the whole run.</li>
+  <li><strong>TLS disabled everywhere.</strong> Some drivers enable TLS by default when it is available. Disabling it everywhere keeps encryption cost out of the comparison.</li>
+  <li><strong>Three runs.</strong> The full sweep ran three times for every language. The charts show the average.</li>
+</ul>
+
+<h2 id="cpu">How CPU cost is measured</h2>
+<p>Client CPU is the user plus system time of the whole benchmark process, measured with
+<code>/usr/bin/time</code>. Server CPU is the change in the <code>mysqld</code> process's CPU
+counters across the same run, read from <code>/proc</code>. Measuring both lets us tell whether
+a language is slow because the database is saturated, because the client is burning its own CPU,
+or because the client is waiting on a lock while both sides sit idle.</p>
+
+<h2 id="hardware">Test environment</h2>
+<p>Each language ran on its own host against a Percona Server instance on the same machine.
+The client connects over TCP to <code>127.0.0.1</code>, so there is no physical network in the
+path. All hosts are identical. Where two or three languages share a host, they ran one after
+another, never at the same time.</p>
+<div class="table-wrap">
+<table>
+  <tbody>
+    <tr><th>CPU</th><td>2 × Intel Xeon Gold 6230, 20 cores each, 80 logical CPUs with Hyper-Threading</td></tr>
+    <tr><th>Memory</th><td>187 GiB DDR4</td></tr>
+    <tr><th>Storage</th><td>Intel SSDPE2KE032T8 NVMe SSD, 2.9 TB</td></tr>
+    <tr><th>Operating system</th><td>Ubuntu 24.04 LTS, kernel 6.8.0-60-generic</td></tr>
+    <tr><th>Database</th><td>Percona Server for MySQL 8.4.11</td></tr>
+    <tr><th>Connection</th><td>TCP over loopback to 127.0.0.1, TLS disabled</td></tr>
+  </tbody>
+</table>
+</div>
+
+<h2 id="server-config">Server configuration</h2>
+<p>The server is tuned for raw throughput, not durability. The buffer pool is far larger than
+the data, so reads never touch disk. Commits do not wait for a disk flush, the doublewrite buffer
+is off and binary logging is disabled. This keeps the database out of the way as much as possible,
+so differences between clients show up clearly. Do not use these settings for production data.</p>
+<details>
+<summary>Full my.cnf</summary>
+<pre><code>[mysqld]
+datadir = /path/to/data
+skip-log-bin
+max_connections = 1000
+require_secure_transport = OFF
+sql_mode = ""
+wait_timeout = 288000
+interactive_timeout = 288000
+default-storage-engine = InnoDB
+
+# Redo log and flushing (not crash-safe, intended for testing only)
+innodb_redo_log_capacity = 32G
+innodb_flush_log_at_trx_commit = 0
+innodb_log_buffer_size = 256M
+innodb_log_writer_threads = ON
+innodb_doublewrite = OFF
+innodb_flush_method = O_DIRECT
+innodb_flush_neighbors = 0
+sync_binlog = 0
+
+# Memory
+innodb_buffer_pool_size = 64G
+innodb_buffer_pool_instances = 16
+innodb_buffer_pool_chunk_size = 1G
+
+# I/O and background work
+innodb_io_capacity = 20000
+innodb_io_capacity_max = 40000
+innodb_adaptive_flushing = ON
+innodb_max_dirty_pages_pct = 90
+innodb_change_buffering = all
+innodb_autoinc_lock_mode = 2
+innodb_purge_threads = 4
+
+# Large packets for multi-row inserts and 1 MiB blobs
+max_allowed_packet = 256M</code></pre>
+</details>
+
+<h2 id="limits">Limits of this test</h2>
+<p>Every benchmark makes trade-offs. These are the ones worth knowing when you read the results.</p>
+<ul>
+  <li><strong>Client and server share a machine.</strong> At high worker counts they compete for the same 80 logical CPUs. A client that uses a lot of CPU also slows down the server it talks to.</li>
+  <li><strong>Some runs are short.</strong> The fastest languages finish workload 2 in well under a second. There is no warm-up phase, so just-in-time compilers in Java, C#, Node.js and LuaJIT warm up inside the timed window.</li>
+  <li><strong>Run-to-run variation.</strong> For a typical data point the three runs differ by about 7% from slowest to fastest. Short read runs at low worker counts vary the most. We draw conclusions only from differences much larger than that.</li>
+  <li><strong>Client CPU includes startup.</strong> Process start, runtime initialisation and connection setup count toward client CPU, though not toward elapsed time. This mainly affects the shortest runs.</li>
+  <li><strong>Runtime defaults.</strong> We did not tune garbage collectors, thread pools or similar runtime settings. Some languages improve a lot with tuning. We report defaults because that is what most applications run with.</li>
+  <li><strong>One concurrency model per language.</strong> Python and Ruby use threads, which is where their interpreter locks show up. Production deployments often run multiple processes instead. That is a valid way to scale, but it is a different test.</li>
+</ul>
+
+<h2 id="code">Source code</h2>
+<p>The benchmark specification, all thirteen implementations and the test harness are available
+in the project repository: <a href="#">[repository link]</a>.</p>
+
+<nav class="series" aria-label="Series">
+  <strong>In this series</strong>
+  <ol>
+    <li><a href="post-1-scripting-languages.html">PHP and Lua keep pace with C on MySQL. Python and Ruby don't.</a></li>
+    <li>When the database is the bottleneck, your language shows up on the CPU bill <em>(coming soon)</em></li>
+    <li>Low CPU doesn't mean fast <em>(coming soon)</em></li>
+    <li>Python's MySQL driver trade-off <em>(coming soon)</em></li>
+    <li>Blob reads: where the rankings break <em>(coming soon)</em></li>
+  </ol>
+</nav>
+
+</article>
+</body>
+</html>
