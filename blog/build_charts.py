@@ -77,7 +77,7 @@ def svg_open(W, H):
     return f'<svg viewBox="0 0 {W} {H}" xmlns="http://www.w3.org/2000/svg" font-family="{FONT}">'
 
 
-def line_chart_svg(workload, series, ymax, ytick, tick_fmt, end_fmt, ylabel, left=56):
+def line_chart_svg(workload, series, ymax, ytick, tick_fmt, end_fmt, ylabel, left=56, label_dots=False):
     W, H = 720, 400
     L, R, T, B = left, 148, 16, 48
     pw, ph = W - L - R, H - T - B
@@ -114,7 +114,7 @@ def line_chart_svg(workload, series, ymax, ytick, tick_fmt, end_fmt, ylabel, lef
         out.append(f'<polyline points="{pts}" fill="none" stroke="{colour}" stroke-width="2" '
                    f'stroke-linejoin="round" stroke-linecap="round"/>')
         out.append(f'<circle cx="{xs[-1]:.1f}" cy="{y(vs[-1]):.1f}" r="4" fill="{colour}" stroke="{BG}" stroke-width="2"/>')
-        ends.append([y(vs[-1]), label.split(" (")[0], vs[-1]])
+        ends.append([y(vs[-1]), label.split(" (")[0], vs[-1], colour])
 
     # Direct end labels, nudged apart so they never overlap.
     ends.sort()
@@ -127,8 +127,12 @@ def line_chart_svg(workload, series, ymax, ytick, tick_fmt, end_fmt, ylabel, lef
             e[0] -= overflow
         for i in range(len(ends) - 2, -1, -1):
             ends[i][0] = min(ends[i][0], ends[i + 1][0] - gap)
-    for ly, name, v in ends:
-        out.append(f'<text x="{xs[-1] + 10:.1f}" y="{ly + 4:.1f}" font-size="12" fill="{INK2}">'
+    for ly, name, v, colour in ends:
+        tx = xs[-1] + 10
+        if label_dots:
+            out.append(f'<circle cx="{tx + 3:.1f}" cy="{ly:.1f}" r="3.5" fill="{colour}"/>')
+            tx += 11
+        out.append(f'<text x="{tx:.1f}" y="{ly + 4:.1f}" font-size="12" fill="{INK2}">'
                    f'{name} <tspan fill="{MUTED}">{end_fmt(v)}</tspan></text>')
     out.append("</svg>")
     return "\n".join(out)
@@ -367,6 +371,24 @@ def build_post_blobranks():
            height=int(h * 760 / 720) + 70)
 
 
+def build_post_compiled():
+    """Compiled and managed languages: C reference, Swift, Rust, Go, Java, C#."""
+    series = [
+        ("c", "C (native reference)", REF),
+        ("swift", "Swift", S1),
+        ("rust", "Rust", S2),
+        ("go", "Go", S3),
+        ("java", "Java", S4),
+        ("csharp", "C#", S5),
+    ]
+    svg = line_chart_svg(2, series, ymax=30e6, ytick=5e6, tick_fmt=fmt_tick_m,
+                         end_fmt=fmt_m, ylabel="Rows per second", label_dots=True)
+    render("post-compiled-w2", page("Integer reads: rows read and summed per second", svg, series))
+    svg = line_chart_svg(4, series, ymax=9e3, ytick=1e3, tick_fmt=lambda t: f"{t:,.0f}",
+                         end_fmt=lambda v: f"{v:,.0f}", ylabel="Blobs per second", left=62, label_dots=True)
+    render("post-compiled-w4", page("Blob reads: 1 MiB blobs read and hashed per second", svg, series))
+
+
 if __name__ == "__main__":
     build_post1()
     build_post2()
@@ -375,3 +397,4 @@ if __name__ == "__main__":
     build_post_native()
     build_post_python()
     build_post_blobranks()
+    build_post_compiled()
