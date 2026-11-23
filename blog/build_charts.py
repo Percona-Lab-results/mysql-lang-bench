@@ -219,14 +219,14 @@ def build_post2():
                          end_fmt=fmt_m, ylabel="Rows inserted per second", left=70)
     render("post-2-w1", page("Rows inserted per second, by number of workers", svg, POST2_SERIES))
 
-    # Client CPU seconds per million rows inserted, 512 workers, cheapest first.
+    # Client CPU microseconds per row inserted (= CPU seconds per million rows), 512 workers, cheapest first.
     rows = []
     for lang, name in NAMES.items():
         r = run(1, lang, 512)
         rows.append((name, r["client_cpu_s"] / r["ops"] * 1e6))
     rows.sort(key=lambda kv: kv[1])
-    svg, h = bar_chart_svg(rows, xmax=60, xtick=10, xlabel="Client CPU seconds per million rows inserted",
-                           value_fmt=lambda v: f"{v:.1f} s")
+    svg, h = bar_chart_svg(rows, xmax=60, xtick=10, xlabel="Client CPU microseconds per row inserted",
+                           value_fmt=lambda v: f"{v:.1f} µs")
     render("post-2-w1-cpu", page("Client CPU cost of inserting rows, 512 workers", svg), height=int(h * 760 / 720) + 70)
 
 
