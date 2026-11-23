@@ -465,6 +465,8 @@ def build_post_compiled():
     svg = line_chart_svg(2, series, ymax=30e6, ytick=5e6, tick_fmt=fmt_tick_m,
                          end_fmt=fmt_m, ylabel="Rows per second", label_dots=True)
     render("post-compiled-w2", page("Integer reads: rows read and summed per second", svg, series))
+    # Blob reads add C++ (reference palette slot 7, violet).
+    series = series[:2] + [("cpp", "C++", "#6250d6")] + series[2:]
     svg = line_chart_svg(4, series, ymax=9e3, ytick=1e3, tick_fmt=lambda t: f"{t:,.0f}",
                          end_fmt=lambda v: f"{v:,.0f}", ylabel="Blobs per second", left=62, label_dots=True)
     render("post-compiled-w4", page("Blob reads: 1 MiB blobs read and hashed per second", svg, series))
