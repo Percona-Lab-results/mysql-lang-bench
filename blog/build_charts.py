@@ -304,6 +304,86 @@ def build_post_lowcpu():
            height=int(h * 760 / 720) + 90)
 
 
+def mini_cores_svg(rows, highlight, xmax=80):
+    """Small stacked client/server cores chart for a table cell. rows: (lang, client, server).
+    The highlighted language is in colour; the others are in two shades of gray."""
+    bar_h, gap = 18, 7
+    L, R, T, B = 74, 34, 4, 26
+    W = 330
+    ph = len(rows) * (bar_h + gap) - gap
+    H = T + ph + B
+    pw = W - L - R
+    x = lambda v: L + pw * v / xmax
+    out = [svg_open(W, H)]
+    for t in range(0, xmax + 1, 20):
+        tx = x(t)
+        if t:
+            out.append(f'<line x1="{tx:.1f}" x2="{tx:.1f}" y1="{T}" y2="{T + ph}" stroke="{GRID}" stroke-width="1"/>')
+        out.append(f'<text x="{tx:.1f}" y="{T + ph + 18}" text-anchor="middle" font-size="13" fill="{MUTED}">{t}</text>')
+    for i, (lang, cli, srv) in enumerate(rows):
+        hi = lang == highlight
+        cc, sc = (S1, S2) if hi else ("#8f8e89", "#cfcec9")
+        by = T + i * (bar_h + gap)
+        cw = max(x(cli) - L, 1.5)
+        sw = max(x(cli + srv) - x(cli) - 2, 1.5)
+        out.append(f'<rect x="{L}" y="{by}" width="{cw:.1f}" height="{bar_h}" fill="{cc}"/>')
+        sx = L + cw + 2
+        r = min(3, sw / 2)
+        out.append(f'<path d="M{sx:.1f},{by} h{sw - r:.1f} a{r},{r} 0 0 1 {r},{r} v{bar_h - 2 * r} '
+                   f'a{r},{r} 0 0 1 {-r},{r} h{-(sw - r):.1f} z" fill="{sc}"/>')
+        weight = ' font-weight="700"' if hi else ""
+        ink = INK if hi else MUTED
+        out.append(f'<text x="{L - 8}" y="{by + bar_h / 2 + 5:.1f}" text-anchor="end" font-size="14"{weight} fill="{ink}">{NAMES[lang]}</text>')
+        out.append(f'<text x="{sx + sw + 5:.1f}" y="{by + bar_h / 2 + 5:.1f}" font-size="13"{weight} fill="{ink}">{cli + srv:.0f}</text>')
+    out.append(f'<line x1="{L}" x2="{L}" y1="{T}" y2="{T + ph}" stroke="{AXIS}" stroke-width="1"/>')
+    out.append(f'<line x1="{L}" x2="{L + pw}" y1="{T + ph}" y2="{T + ph}" stroke="{AXIS}" stroke-width="1"/>')
+    out.append("</svg>")
+    return "\n".join(out), H
+
+
+def mini_page(title, svg):
+    key = "".join(f'<span style="display:inline-flex;align-items:center;gap:5px;margin-right:12px">'
+                  f'<i style="display:inline-block;width:11px;height:11px;border-radius:2px;background:{c}"></i>{t}</span>'
+                  for t, c in (("client cores", S1), ("server cores", S2)))
+    return (f'<!doctype html><html><head><meta charset="utf-8"><style>'
+            f'body{{margin:0;background:{BG};font-family:{FONT}}}'
+            f'.wrap{{width:330px;padding:8px 10px}} h1{{font-size:14px;margin:0 0 4px;color:{INK}}}'
+            f'.k{{font-size:13px;color:{INK2};margin-bottom:4px}} svg{{width:100%;height:auto;display:block}}'
+            f'</style></head><body><div class="wrap"><h1>{title}</h1><div class="k">{key}</div>{svg}</div></body></html>')
+
+
+def render_mini(name, html, height):
+    BUILD.mkdir(exist_ok=True)
+    src = BUILD / f"{name}.html"
+    out = PNG / f"{name}.png"
+    src.write_text(html)
+    browser = shutil.which("chromium") or shutil.which("chromium-browser") or shutil.which("google-chrome")
+    subprocess.run([browser, "--headless", "--disable-gpu", "--no-sandbox", "--hide-scrollbars",
+                    "--force-device-scale-factor=3", f"--window-size=350,{height}",
+                    f"--screenshot={out}", src.as_uri()],
+                   check=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+    print("wrote", out)
+
+
+def build_post2_table():
+    """Three small pictures for part 2's "Reading your own CPU graphs" table: cores busy at 512 workers."""
+    def rows(workload, langs):
+        out = []
+        for lang in langs:
+            r = run(workload, lang, 512)
+            out.append((lang, r["client_cpu_s"] / r["run_wall_s"], r["server_cpu_s"] / r["run_wall_s"]))
+        return out
+    w2 = ["c", "lua", "php", "python", "ruby"]
+    w4 = ["c", "php", "go", "java", "csharp"]
+    for name, title, data, hi in (
+        ("post-2-tbl-c", "Integer reads, 512 workers", rows(2, w2), "c"),
+        ("post-2-tbl-python", "Integer reads, 512 workers", rows(2, w2), "python"),
+        ("post-2-tbl-csharp", "Blob reads, 512 workers", rows(4, w4), "csharp"),
+    ):
+        svg, h = mini_cores_svg(data, hi)
+        render_mini(name, mini_page(title, svg), height=h + 54)
+
+
 def build_post_native():
     """Native languages on blob reads: libmysqlclient (C, Swift) vs own-language drivers (Rust, Go)."""
     series = [
@@ -399,3 +479,4 @@ if __name__ == "__main__":
     build_post_python()
     build_post_blobranks()
     build_post_compiled()
+    build_post2_table()
