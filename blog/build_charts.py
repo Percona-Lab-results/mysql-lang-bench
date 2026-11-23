@@ -308,7 +308,7 @@ def mini_cores_svg(rows, highlight, xmax=80):
     """Small stacked client/server cores chart for a table cell. rows: (lang, client, server).
     The highlighted language is in colour; the others are in two shades of gray."""
     bar_h, gap = 16, 6
-    L, R, T, B = 50, 24, 4, 22
+    L, R, T, B = 60, 24, 4, 22
     W = 190
     ph = len(rows) * (bar_h + gap) - gap
     H = T + ph + B
