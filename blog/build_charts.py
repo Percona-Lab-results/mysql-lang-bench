@@ -307,19 +307,19 @@ def build_post_lowcpu():
 def mini_cores_svg(rows, highlight, xmax=80):
     """Small stacked client/server cores chart for a table cell. rows: (lang, client, server).
     The highlighted language is in colour; the others are in two shades of gray."""
-    bar_h, gap = 18, 7
-    L, R, T, B = 74, 34, 4, 26
-    W = 330
+    bar_h, gap = 16, 6
+    L, R, T, B = 50, 24, 4, 22
+    W = 190
     ph = len(rows) * (bar_h + gap) - gap
     H = T + ph + B
     pw = W - L - R
     x = lambda v: L + pw * v / xmax
     out = [svg_open(W, H)]
-    for t in range(0, xmax + 1, 20):
+    for t in range(0, xmax + 1, 40):
         tx = x(t)
         if t:
             out.append(f'<line x1="{tx:.1f}" x2="{tx:.1f}" y1="{T}" y2="{T + ph}" stroke="{GRID}" stroke-width="1"/>')
-        out.append(f'<text x="{tx:.1f}" y="{T + ph + 18}" text-anchor="middle" font-size="13" fill="{MUTED}">{t}</text>')
+        out.append(f'<text x="{tx:.1f}" y="{T + ph + 16}" text-anchor="middle" font-size="12" fill="{MUTED}">{t}</text>')
     for i, (lang, cli, srv) in enumerate(rows):
         hi = lang == highlight
         cc, sc = (S1, S2) if hi else ("#8f8e89", "#cfcec9")
@@ -333,8 +333,8 @@ def mini_cores_svg(rows, highlight, xmax=80):
                    f'a{r},{r} 0 0 1 {-r},{r} h{-(sw - r):.1f} z" fill="{sc}"/>')
         weight = ' font-weight="700"' if hi else ""
         ink = INK if hi else MUTED
-        out.append(f'<text x="{L - 8}" y="{by + bar_h / 2 + 5:.1f}" text-anchor="end" font-size="14"{weight} fill="{ink}">{NAMES[lang]}</text>')
-        out.append(f'<text x="{sx + sw + 5:.1f}" y="{by + bar_h / 2 + 5:.1f}" font-size="13"{weight} fill="{ink}">{cli + srv:.0f}</text>')
+        out.append(f'<text x="{L - 8}" y="{by + bar_h / 2 + 5:.1f}" text-anchor="end" font-size="13"{weight} fill="{ink}">{NAMES[lang]}</text>')
+        out.append(f'<text x="{sx + sw + 4:.1f}" y="{by + bar_h / 2 + 5:.1f}" font-size="12"{weight} fill="{ink}">{cli + srv:.0f}</text>')
     out.append(f'<line x1="{L}" x2="{L}" y1="{T}" y2="{T + ph}" stroke="{AXIS}" stroke-width="1"/>')
     out.append(f'<line x1="{L}" x2="{L + pw}" y1="{T + ph}" y2="{T + ph}" stroke="{AXIS}" stroke-width="1"/>')
     out.append("</svg>")
@@ -342,13 +342,13 @@ def mini_cores_svg(rows, highlight, xmax=80):
 
 
 def mini_page(title, svg):
-    key = "".join(f'<span style="display:inline-flex;align-items:center;gap:5px;margin-right:12px">'
-                  f'<i style="display:inline-block;width:11px;height:11px;border-radius:2px;background:{c}"></i>{t}</span>'
+    key = "".join(f'<span style="display:inline-flex;align-items:center;gap:5px;margin-right:8px">'
+                  f'<i style="display:inline-block;width:10px;height:10px;border-radius:2px;background:{c}"></i>{t}</span>'
                   for t, c in (("client cores", S1), ("server cores", S2)))
     return (f'<!doctype html><html><head><meta charset="utf-8"><style>'
             f'body{{margin:0;background:{BG};font-family:{FONT}}}'
-            f'.wrap{{width:330px;padding:8px 10px}} h1{{font-size:14px;margin:0 0 4px;color:{INK}}}'
-            f'.k{{font-size:13px;color:{INK2};margin-bottom:4px}} svg{{width:100%;height:auto;display:block}}'
+            f'.wrap{{width:190px;padding:6px 6px}} h1{{font-size:13px;margin:0 0 3px;color:{INK}}}'
+            f'.k{{font-size:12px;color:{INK2};margin-bottom:4px}} svg{{width:100%;height:auto;display:block}}'
             f'</style></head><body><div class="wrap"><h1>{title}</h1><div class="k">{key}</div>{svg}</div></body></html>')
 
 
@@ -359,7 +359,7 @@ def render_mini(name, html, height):
     src.write_text(html)
     browser = shutil.which("chromium") or shutil.which("chromium-browser") or shutil.which("google-chrome")
     subprocess.run([browser, "--headless", "--disable-gpu", "--no-sandbox", "--hide-scrollbars",
-                    "--force-device-scale-factor=3", f"--window-size=350,{height}",
+                    "--force-device-scale-factor=4", f"--window-size=202,{height}",
                     f"--screenshot={out}", src.as_uri()],
                    check=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
     print("wrote", out)
@@ -381,7 +381,7 @@ def build_post2_table():
         ("post-2-tbl-csharp", "Blob reads, 512 workers", rows(4, w4), "csharp"),
     ):
         svg, h = mini_cores_svg(data, hi)
-        render_mini(name, mini_page(title, svg), height=h + 54)
+        render_mini(name, mini_page(title, svg), height=h + 46)
 
 
 def build_post_native():
