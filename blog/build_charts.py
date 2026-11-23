@@ -376,8 +376,8 @@ def build_post2_table():
     w2 = ["c", "lua", "php", "python", "ruby"]
     w4 = ["c", "php", "go", "java", "csharp"]
     for name, title, data, hi in (
-        ("post-2-tbl-c", "Integer reads, 512 workers", rows(2, w2), "c"),
-        ("post-2-tbl-python", "Integer reads, 512 workers", rows(2, w2), "python"),
+        ("post-2-tbl-c", "Int reads, 512 workers", rows(2, w2), "c"),
+        ("post-2-tbl-python", "Int reads, 512 workers", rows(2, w2), "python"),
         ("post-2-tbl-csharp", "Blob reads, 512 workers", rows(4, w4), "csharp"),
     ):
         svg, h = mini_cores_svg(data, hi)
