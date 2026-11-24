@@ -488,7 +488,7 @@ def main():
             "__CAT_DARK__": cat_css(PAL_DARK),
         }.items():
             html = html.replace(k, v)
-        out_path.write_text(html)
+        out_path.write_text(separate_langs.add_note(html))
         print(f"written: {out_path}")
 
     render_page(
@@ -527,7 +527,7 @@ def main():
         "__CAT_DARK__": cat_css(PAL_DARK),
     }.items():
         tb_html = tb_html.replace(k, v)
-    TB_OUT.write_text(tb_html)
+    TB_OUT.write_text(separate_langs.add_note(tb_html))
     print(f"written: {TB_OUT}")
 
     # Infographic summary page.
@@ -539,7 +539,7 @@ def main():
         "__CAT_DARK__": cat_css(PAL_DARK),
     }.items():
         info_html = info_html.replace(k, v)
-    INFO_OUT.write_text(info_html)
+    INFO_OUT.write_text(separate_langs.add_note(info_html))
     print(f"written: {INFO_OUT}")
     print(f"workloads: {', '.join(map(str, workloads))}; {len(langs)} languages")
 

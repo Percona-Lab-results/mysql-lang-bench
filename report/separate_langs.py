@@ -25,7 +25,19 @@ ROOT = Path(__file__).resolve().parent.parent
 # lang -> averaged dataset file (relative to the repo root)
 SEPARATE_LANGS = {"python-mp": "runs/python-mp/avg.json"}
 
-DISPLAY = {"python-mp": "Python (multi-process)"}
+DISPLAY = {"python-mp": "Python-MP"}  # short: fits chart end labels
+
+# One-paragraph explanation shown at the top of comparison pages.
+NOTES = {
+    "python-mp": (
+        "<strong>Python-MP</strong> is a separate benchmark, not part of the standard "
+        "13-language comparison: the same four workloads with the same Python driver "
+        "(mysqlclient), but every worker is its own process (as in PHP and Lua) instead of "
+        "a thread, plus tuning: mysqlclient's low-level C API instead of cursors, blobs "
+        "sent as hex literals instead of escaped strings, built-in summing, and the "
+        "garbage collector off in workers. Average of three runs. "
+        "<strong>Python</strong> is the standard threaded implementation."),
+}
 
 
 def compare_langs():
@@ -63,3 +75,13 @@ def output_dir(default):
     d = default / ("compare-" + "+".join(langs))
     d.mkdir(parents=True, exist_ok=True)
     return d
+
+
+def add_note(html):
+    """Insert the requested benchmarks' notes after the page's first </h1>."""
+    langs = compare_langs()
+    if not langs:
+        return html
+    note = "".join(f'<p class="context" style="border-left:3px solid currentColor;'
+                   f'padding-left:10px">{NOTES[l]}</p>' for l in langs if l in NOTES)
+    return html.replace("</h1>", "</h1>" + note, 1)
