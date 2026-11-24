@@ -47,6 +47,10 @@ past 128 connections, the only thing left to benchmark is the database itself.
   and the result JSON schema.
 - **`impl/<lang>/`** — the 12 implementations (C, C++, Rust, Swift, Go, Java, C#,
   PHP, Python, Ruby, JavaScript, TypeScript), each with its own `build.sh`/`run.sh`.
+- **`impl/python-mp/`** — a separate, multi-process and tuned Python benchmark
+  (see SPEC.md, "Separate benchmarks"). Its results stay out of the standard
+  reports; compare on request with `report/compare.py python-mp [--with c,php | --all]`
+  or `BENCH_COMPARE=python-mp report/generate_html_report.py`.
 - **`harness/`** — SSH orchestration: deploy the Percona Server tarball and the
   benchmark code to each host, build, load the 10M-row table, run thread-count
   sweeps detached with status files, collect results, and capture client/server

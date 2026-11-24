@@ -18,14 +18,19 @@ import subprocess
 import sys
 from pathlib import Path
 
+import separate_langs
+
 ROOT = Path(__file__).resolve().parent.parent
-OUT = ROOT / "report" / "report.html"
-BARS_OUT = ROOT / "report" / "bars.html"
-ANN_OUT = ROOT / "report" / "annotated.html"
-RANK_OUT = ROOT / "report" / "ranked.html"
-TB_OUT = ROOT / "report" / "tablebars.html"
-INFO_OUT = ROOT / "report" / "infographic.html"
-PNG_DIR = ROOT / "report" / "png"
+# Standard pages go to report/; with BENCH_COMPARE set (see separate_langs.py)
+# they go to report/compare-<langs>/ so the standard pages are not overwritten.
+REPORT_DIR = separate_langs.output_dir(ROOT / "report")
+OUT = REPORT_DIR / "report.html"
+BARS_OUT = REPORT_DIR / "bars.html"
+ANN_OUT = REPORT_DIR / "annotated.html"
+RANK_OUT = REPORT_DIR / "ranked.html"
+TB_OUT = REPORT_DIR / "tablebars.html"
+INFO_OUT = REPORT_DIR / "infographic.html"
+PNG_DIR = REPORT_DIR / "png"
 
 # PNG export geometry. PNG_W is the output image width in pixels; scale factor 1
 # makes the screenshot exactly that wide. PNG_PAD is the horizontal padding the
@@ -59,6 +64,7 @@ DISPLAY = {
     "c": "C", "cpp": "C++", "swift": "Swift", "rust": "Rust", "php": "PHP",
     "java": "Java", "csharp": "C#", "go": "Go", "javascript": "JavaScript",
     "typescript": "TypeScript", "python": "Python", "ruby": "Ruby", "lua": "Lua",
+    **separate_langs.DISPLAY,
 }
 # workload id -> (title, subtitle)
 WL = {
@@ -80,10 +86,12 @@ def load_rows():
     ds = os.environ.get("BENCH_DATASET")
     if ds:
         raw = json.loads(Path(ds).read_text())
-        records = raw.values() if isinstance(raw, dict) else raw
+        records = list(raw.values() if isinstance(raw, dict) else raw)
+        records += separate_langs.dataset_records()
         return {(r["workload"], r["lang"], r.get("tuned"), r["threads"]): r
                 for r in records
-                if all(k in r for k in ("workload", "threads", "throughput", "lang"))}
+                if all(k in r for k in ("workload", "threads", "throughput", "lang"))
+                and separate_langs.keep(r["lang"])}
     latest = {}
     for f in sorted(ROOT.glob("results/*/*.json")):
         try:
@@ -91,6 +99,8 @@ def load_rows():
         except (json.JSONDecodeError, OSError):
             continue
         if "workload" not in r or "threads" not in r or "throughput" not in r:
+            continue
+        if not separate_langs.keep(r.get("lang")):
             continue
         latest[(r["workload"], r["lang"], r.get("tuned"), r["threads"])] = r
     return latest
@@ -150,7 +160,7 @@ def table(series, threads):
 # use each language's chart colour.
 SLOT = {"c": 1, "cpp": 2, "swift": 3, "rust": 8, "php": 5, "java": 6,
         "csharp": 11, "go": 10, "javascript": 4, "typescript": 9, "python": 7,
-        "ruby": 12, "lua": 13}
+        "ruby": 12, "lua": 13, "python-mp": 7}
 
 # Plain-language framing per workload for the infographic.
 INFO_WL = {
@@ -777,6 +787,7 @@ const PAGE_BARS = __PAGE_BARS__;
     csharp:{slot:11,shape:"star"}, go:{slot:10,shape:"diamond"}, javascript:{slot:4,shape:"tridown"},
     typescript:{slot:9,shape:"star"}, python:{slot:7,shape:"plus"}, ruby:{slot:12,shape:"triangle"},
     lua:{slot:13,shape:"x"},
+    "python-mp":{slot:7,shape:"circle"},  // same hue as Python, different marker
   };
   const styleFor = lang => { const s = STYLE[lang] || {slot:1,shape:"circle"};
     return { color:`var(--cat-${s.slot})`, shape:s.shape }; };

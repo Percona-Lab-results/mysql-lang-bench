@@ -151,3 +151,32 @@ c/cpp/swift = libmysqlclient; rust = `mysql` crate; java = Connector/J; csharp =
 MySqlConnector; php = mysqli; python = mysqlclient; ruby = mysql2; lua = libmysqlclient
 via LuaJIT FFI; javascript/typescript = mysql2 (Node). Go/C# additionally run a tuned
 variant (Go `GOMAXPROCS=16 GOGC=800`; C# server GC) kept as a separate benchmark.
+
+## Separate benchmarks (not part of the 13-language comparison)
+
+These follow every rule above (workloads, counts, PRNG, barrier timing, output
+JSON) but are reported under their own `lang` value. They are never added to
+`runs/avg.json`; their averages live in `runs/<lang>/avg.json`, and the
+standard reports leave them out unless `BENCH_COMPARE=<lang>` is set (see
+`report/separate_langs.py` and `report/compare.py`). They are not part of
+`config/hosts.conf`; run them explicitly, e.g.
+`harness/run_sweep.sh 10.30.2.27 python-mp`.
+
+### python-mp — Python, multi-process and tuned (`impl/python-mp`)
+
+Same driver (mysqlclient) and interpreter as `impl/python`. Differences:
+
+- Workers are **forked processes** (like PHP and Lua), each with its own
+  interpreter and GIL. Start: a `multiprocessing.Barrier` shared with the
+  parent, then a `go` Event the parent sets only after sampling `t_start`
+  (with the barrier alone, children could start before the parent woke). Each child writes its latencies to a private temp file
+  after its work; the parent reads them after `t_end`.
+- Uses mysqlclient's C-level `connection.query()` / `store_result()` /
+  `fetch_row()` instead of the pure-Python cursor layer.
+- Workload 3 sends the blob as a hex literal `X'…'` (mysqlclient's
+  `escape_string` costs ~27 ms CPU per MiB, `bytes.hex()` ~4 ms); the stored
+  bytes are identical.
+- Workload 2 sums with C-level builtins (`sum(map(itemgetter(0), rows))`).
+- The cyclic garbage collector is disabled in workers (the workloads create no
+  reference cycles).
+- `prepared` stays `false` (mysqlclient has no server-side prepared statements).

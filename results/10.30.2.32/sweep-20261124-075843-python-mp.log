@@ -1,0 +1,49 @@
+mysql: [Warning] Using a password on the command line interface can be insecure.
+mysql: [Warning] Using a password on the command line interface can be insecure.
+python-mp w=1 t=4 ok
+python-mp w=2 t=4 ok
+mysql: [Warning] Using a password on the command line interface can be insecure.
+python-mp w=3 t=4 ok
+python-mp w=4 t=4 ok
+mysql: [Warning] Using a password on the command line interface can be insecure.
+python-mp w=1 t=8 ok
+python-mp w=2 t=8 ok
+mysql: [Warning] Using a password on the command line interface can be insecure.
+python-mp w=3 t=8 ok
+python-mp w=4 t=8 ok
+mysql: [Warning] Using a password on the command line interface can be insecure.
+python-mp w=1 t=16 ok
+python-mp w=2 t=16 ok
+mysql: [Warning] Using a password on the command line interface can be insecure.
+python-mp w=3 t=16 ok
+python-mp w=4 t=16 ok
+mysql: [Warning] Using a password on the command line interface can be insecure.
+python-mp w=1 t=32 ok
+python-mp w=2 t=32 ok
+mysql: [Warning] Using a password on the command line interface can be insecure.
+python-mp w=3 t=32 ok
+python-mp w=4 t=32 ok
+mysql: [Warning] Using a password on the command line interface can be insecure.
+python-mp w=1 t=64 ok
+python-mp w=2 t=64 ok
+mysql: [Warning] Using a password on the command line interface can be insecure.
+python-mp w=3 t=64 ok
+python-mp w=4 t=64 ok
+mysql: [Warning] Using a password on the command line interface can be insecure.
+python-mp w=1 t=128 ok
+python-mp w=2 t=128 ok
+mysql: [Warning] Using a password on the command line interface can be insecure.
+python-mp w=3 t=128 ok
+python-mp w=4 t=128 ok
+mysql: [Warning] Using a password on the command line interface can be insecure.
+python-mp w=1 t=256 ok
+python-mp w=2 t=256 ok
+mysql: [Warning] Using a password on the command line interface can be insecure.
+python-mp w=3 t=256 ok
+python-mp w=4 t=256 ok
+mysql: [Warning] Using a password on the command line interface can be insecure.
+python-mp w=1 t=512 ok
+python-mp w=2 t=512 ok
+mysql: [Warning] Using a password on the command line interface can be insecure.
+python-mp w=3 t=512 ok
+python-mp w=4 t=512 ok

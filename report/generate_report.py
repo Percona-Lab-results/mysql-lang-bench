@@ -7,6 +7,8 @@ import sys
 from collections import defaultdict
 from pathlib import Path
 
+import separate_langs
+
 ROOT = Path(__file__).resolve().parent.parent
 WL = {1: "Workload 1 — integer insert (rows/s)",
       2: "Workload 2 — integer fetch + sum (rows/s)",
@@ -20,6 +22,7 @@ def load():
     if ds:
         raw = json.loads(Path(ds).read_text())
         src = list(raw.values() if isinstance(raw, dict) else raw)
+        src += separate_langs.dataset_records()
     else:
         src = []
         for f in sorted(ROOT.glob("results/*/*.json")):
@@ -33,6 +36,8 @@ def load():
     latest = {}
     for r in src:
         if "workload" not in r or "threads" not in r:
+            continue
+        if not separate_langs.keep(r.get("lang")):
             continue
         v = r.get("tuned")
         r["_disp"] = r["lang"] + (" (optimized)" if v is True else " (stock)" if v is False else "")
@@ -62,7 +67,9 @@ def main():
             cells = [f"{by[lang][t]:,.0f}" if t in by[lang] else "-" for t in threads]
             print(f"| {lang} | " + " | ".join(cells) + " |")
 
-    csv_path = ROOT / "results" / "summary.csv"
+    cmp = separate_langs.compare_langs()
+    csv_path = ROOT / "results" / (
+        "summary-compare-" + "+".join(cmp) + ".csv" if cmp else "summary.csv")
     cols = ["workload", "workload_name", "unit", "lang", "tuned", "threads",
             "throughput", "mb_per_s", "ops", "errors", "elapsed_s",
             "p50_us", "p95_us", "p99_us", "max_us", "client_cpu_s",
